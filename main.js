@@ -17,7 +17,7 @@ const ui = {
   play: $('play'), resume: $('resume'), restart: $('restart'), loading: $('loading'),
   wave: $('wave'), left: $('left'), kills: $('kills'), banner: $('banner'),
   hpfill: $('hpfill'), hptext: $('hptext'), mag: $('mag'), reserve: $('reserve'),
-  wname: $('wname'), reloadhint: $('reloadhint'), slot1: $('slot1'), slot2: $('slot2'),
+  wname: $('wname'), reloadhint: $('reloadhint'), slots: $('slots'), scope: $('scope'),
   toasts: $('toasts'), vignette: $('vignette'), hit: $('hitmarker'),
   cross: $('crosshair'), overstats: $('overstats'),
   flash: $('flash'), nadeRow: $('naderow'), bossbar: $('bossbar'), bossname: $('bossname'), bossfill: $('bossfill'), nades: $('nades'),
@@ -262,7 +262,16 @@ function initAudio() {
   noiseBuf = actx.createBuffer(1, actx.sampleRate * 1.5, actx.sampleRate);
   const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
   startAmbience();
+  // looping streams for bug spray (hiss) and flamethrower (roar)
+  for (const [key, type, freq, q] of [['spray', 'highpass', 3500, 0.7], ['flame', 'lowpass', 700, 0.8]]) {
+    const src = actx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+    const f = actx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+    const g = actx.createGain(); g.gain.value = 0; src.connect(f); f.connect(g); g.connect(master); src.start();
+    loops[key] = g;
+  }
 }
+const loops = {};
+function setLoop(key, v) { const g = loops[key]; if (g) g.gain.setTargetAtTime(v, actx.currentTime, 0.05); }
 function noise(dur, { type = 'lowpass', freq = 1000, q = 1, vol = 0.5, attack = 0.002, decay = dur, when = 0, dest = master } = {}) {
   if (!actx) return;
   const t = actx.currentTime + when, s = actx.createBufferSource(); s.buffer = noiseBuf;
@@ -281,6 +290,9 @@ function tone(freq, dur, { type = 'sine', vol = 0.3, to = freq, when = 0, attack
 const sfx = {
   rifle() { noise(0.18, { freq: 2600, vol: 0.55, decay: 0.16 }); noise(0.35, { freq: 400, vol: 0.5, decay: 0.3 }); tone(140, 0.12, { to: 50, vol: 0.4 }); },
   pistol() { noise(0.25, { freq: 1800, vol: 0.7, decay: 0.2 }); tone(180, 0.18, { to: 45, vol: 0.55, type: 'triangle' }); },
+  smg() { noise(0.12, { freq: 2200, vol: 0.45, decay: 0.1 }); noise(0.25, { freq: 350, vol: 0.4, decay: 0.2 }); tone(160, 0.08, { to: 60, vol: 0.3 }); },
+  sniper() { noise(0.3, { freq: 5000, vol: 0.9, decay: 0.25 }); noise(1.6, { freq: 300, vol: 0.8, decay: 1.5 }); tone(90, 0.6, { to: 30, vol: 0.8 }); tone(1100, 0.05, { vol: 0.12, type: 'square', when: 0.5 }); noise(0.08, { type: 'bandpass', freq: 2500, vol: 0.35, when: 0.62 }); tone(800, 0.05, { vol: 0.12, type: 'square', when: 0.85 }); },
+  gear() { tone(300, 0.15, { vol: 0.25, type: 'square', to: 600 }); tone(600, 0.25, { vol: 0.25, type: 'square', to: 1200, when: 0.12 }); tone(900, 0.4, { vol: 0.2, when: 0.3 }); },
   empty() { tone(1800, 0.03, { vol: 0.15, type: 'square' }); },
   reload() { tone(900, 0.04, { vol: 0.12, type: 'square', when: 0.1 }); noise(0.06, { type: 'bandpass', freq: 3000, vol: 0.3, when: 0.35 }); tone(700, 0.05, { vol: 0.15, type: 'square', when: 0.9 }); },
   reloadEnd() { noise(0.05, { type: 'bandpass', freq: 2500, vol: 0.35 }); tone(1200, 0.04, { vol: 0.12, type: 'square', when: 0.05 }); },
@@ -398,9 +410,36 @@ const WEAPONS = [
     len: 0.24, pos: new THREE.Vector3(0.14, -0.14, -0.34), muzzle: new THREE.Vector3(0, 0.27, -0.5),
     color: 0x3a3c3e, sound: 'pistol', ammoPickup: 21,
   },
+  {
+    name: 'BUG SPRAY', key: 'spray', kind: 'spray', unit: 'SPRAY', auto: true, rate: 0, spread: 0, moveSpread: 0,
+    magSize: 100, mag: 100, reserve: 200, maxReserve: 500, reloadTime: 1.2, recoil: 0, kick: 0,
+    use: 18, range: 6.5, cone: 0.22, dps: 80, len: 0.65, pos: new THREE.Vector3(0.17, -0.13, -0.36), muzzle: new THREE.Vector3(0, 0.12, -0.035),
+    color: 0xe8c020, sound: null, ammoPickup: 0,
+  },
+  {
+    name: 'PPD-40', key: 'smg', auto: true, rate: 0.063, dmg: 24, spread: 0.02, moveSpread: 0.03,
+    magSize: 71, mag: 71, reserve: 142, maxReserve: 426, reloadTime: 3.0, recoil: 0.011, kick: 0.03,
+    len: 0.74, pos: new THREE.Vector3(0.19, -0.18, -0.46), muzzle: new THREE.Vector3(0, 0.075, -0.5),
+    color: 0x3a2a1c, sound: 'smg', ammoPickup: 71,
+  },
+  {
+    name: 'FLAMETHROWER', key: 'flame', kind: 'flame', unit: 'FUEL', auto: true, rate: 0, spread: 0, moveSpread: 0,
+    magSize: 100, mag: 100, reserve: 100, maxReserve: 400, reloadTime: 2.2, recoil: 0, kick: 0,
+    use: 14, range: 9.5, cone: 0.15, dps: 120, len: 0.8, pos: new THREE.Vector3(0.2, -0.2, -0.46), muzzle: new THREE.Vector3(0, 0.085, -0.5),
+    color: 0x4a4d3a, sound: null, ammoPickup: 0,
+  },
+  {
+    name: 'AWP', key: 'awp', kind: 'sniper', auto: false, rate: 1.35, dmg: 450, spread: 0.06, moveSpread: 0.04, pierce: true,
+    magSize: 5, mag: 5, reserve: 20, maxReserve: 40, reloadTime: 3.2, recoil: 0.09, kick: 0.12,
+    len: 0.95, pos: new THREE.Vector3(0.2, -0.17, -0.52), muzzle: new THREE.Vector3(0, 0.02, -0.5),
+    color: 0x3b4a2e, sound: 'sniper', ammoPickup: 5,
+  },
 ];
+for (const w of WEAPONS) { w.kind = w.kind || 'gun'; w.owned = w.key === 'rifle' || w.key === 'pistol'; w.startMag = w.mag; w.startReserve = w.reserve; }
+const WI = Object.fromEntries(WEAPONS.map((w, i) => [w.key, i]));
+let prevWeapon = 1;
 let cur = 0;
-const wstate = { nadeCd: 0, throwT: 0, cooldown: 0, reloading: 0, switching: 0, recoil: 0, kick: 0, mouseDown: false, triggerReleased: true, spreadHeat: 0 };
+const wstate = { scoped: false, scopeK: 0, nadeCd: 0, throwT: 0, cooldown: 0, reloading: 0, switching: 0, recoil: 0, kick: 0, mouseDown: false, triggerReleased: true, spreadHeat: 0 };
 
 const vmRoot = new THREE.Group(); vmScene.add(vmRoot);
 const flashTex = canvasTex(64, 64, (x) => {
@@ -415,15 +454,33 @@ const fireTex = canvasTex(64, 64, (x) => {
   x.fillStyle = g; x.beginPath(); x.moveTo(32, 2); x.quadraticCurveTo(58, 34, 50, 52); x.quadraticCurveTo(32, 66, 14, 52); x.quadraticCurveTo(6, 34, 32, 2); x.fill();
 });
 
+const sprayLabel = canvasTex(128, 64, (x, W, H) => {
+  x.fillStyle = '#e8c020'; x.fillRect(0, 0, W, H); x.fillStyle = '#1d6b2a'; x.fillRect(0, 14, W, 36);
+  x.fillStyle = '#fff'; x.font = 'bold 20px sans-serif'; x.textAlign = 'center'; x.fillText('BUG-X', W / 2, 40);
+  x.strokeStyle = '#c0392b'; x.lineWidth = 4; x.beginPath(); x.arc(22, 32, 9, 0, 7); x.moveTo(15, 25); x.lineTo(29, 39); x.stroke();
+});
+function makeSprayCan() {
+  const g = new THREE.Group();
+  const can = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.2, 20), [new THREE.MeshStandardMaterial({ map: sprayLabel, metalness: 0.4, roughness: 0.35 }), new THREE.MeshStandardMaterial({ color: 0xbfbfbf, metalness: 0.9, roughness: 0.3 }), new THREE.MeshStandardMaterial({ color: 0xbfbfbf, metalness: 0.9, roughness: 0.3 })]);
+  can.rotation.y = Math.PI / 2;
+  const shoulder = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.035, 0.02, 20), new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.9, roughness: 0.3 })); shoulder.position.y = 0.11;
+  const cap = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.018, 0.03), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 })); cap.position.set(0, 0.125, -0.008);
+  g.add(can, shoulder, cap); g.traverse(o => { o.castShadow = true; });
+  return g;
+}
 function buildWeapon(w, geo) {
   const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: w.color, metalness: 0.6, roughness: 0.45 });
-  const mesh = new THREE.Mesh(geo, mat); mesh.scale.setScalar(w.len);
+  let mesh;
+  if (geo.isBufferGeometry) {
+    mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: w.color, metalness: 0.6, roughness: 0.45 })); mesh.scale.setScalar(w.len);
+  } else { mesh = geo; mesh.scale.setScalar(w.len); }
   g.add(mesh);
+  w.muzzleLocal = w.muzzle.clone().multiplyScalar(w.len);
   const flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
   flash.position.copy(w.muzzle).multiplyScalar(w.len); flash.position.z -= 0.03; flash.scale.setScalar(w.key === 'rifle' ? 0.12 : 0.14);
   flash.visible = false; g.add(flash);
   w.group = g; w.flash = flash; w.mesh = mesh;
+  if (w.key === 'spray') g.rotation.order = 'YXZ';
   g.position.copy(w.pos); g.visible = false; vmRoot.add(g);
 }
 
@@ -468,7 +525,7 @@ function makeSpider(size) {
     dmg: Math.round(4 + 18 * t),
     jumpRange: lerp(3.5, 8, t), jumpCd: rr(0.5, 2),
     state: 'walk', stateT: 0, vel: new THREE.Vector3(), yaw: 0, phase: Math.random() * 10,
-    hitCd: 0, flash: 0, dead: false, deadT: 0, airHit: false, boss: false, broodT: 6, stunT: 0, burnT: 0,
+    hitCd: 0, flash: 0, dead: false, deadT: 0, airHit: false, boss: false, broodT: 6, stunT: 0, burnT: 0, slowT: 0,
   };
 }
 
@@ -529,12 +586,16 @@ function killSpider(s) {
     game.boss = null; ui.bossbar.classList.add('hidden');
     banner(`${s.name.toUpperCase()} SLAIN`, 2.5); shake(0.6);
     dropPickup(px + 1.5, pz, 'health'); dropPickup(px - 1.5, pz, 'ammo');
+    if (game.wave >= 4 && !WEAPONS[WI.smg].owned && !pickups.some(q => q.type === 'wpn_smg')) dropPickup(px, pz, 'wpn_smg');
+    if (WEAPONS[WI.flame].owned) dropPickup(px + 2.5, pz + 2.5, 'gascan');
     unlockedNades().forEach((t, k, arr) => { const a = k / arr.length * 6.28 + 0.8; dropPickup(px + Math.cos(a) * 1.8, pz + Math.sin(a) * 1.8, t); });
     return;
   }
   // random throwable drop: stun from wave 3, frag from wave 5, molotov from wave 8
   const un = unlockedNades();
   if (un.length && Math.random() < 0.14 + 0.1 * s.t) dropPickup(px, pz, un[Math.floor(Math.random() * un.length)], true);
+  else if (WEAPONS[WI.flame].owned && Math.random() < 0.09) dropPickup(px, pz, 'gascan', true);
+  else if (WEAPONS[WI.spray].owned && Math.random() < 0.06) dropPickup(px, pz, 'spraycan', true);
   else if (Math.random() < 0.12 + 0.2 * s.t) dropPickup(px, pz, Math.random() < 0.6 ? 'ammo' : 'health', true);
 }
 
@@ -578,13 +639,14 @@ function updateSpiders(dt, time) {
       const weave = Math.sin(time * 2.3 + s.phase) * (dist > 6 ? 0.7 : 0.2);
       const yaw = targetYaw + weave;
       let dy = yaw - s.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); s.yaw += dy * Math.min(1, dt * 8);
-      const sp = s.speed * (s.boss ? 0.6 + 0.4 * burstF : burstF) * (dist < 0.9 + s.size * 0.35 ? 0 : 1);
+      if (s.slowT > 0) s.slowT -= dt;
+      const sp = (s.slowT > 0 ? 0.4 : 1) * s.speed * (s.boss ? 0.6 + 0.4 * burstF : burstF) * (dist < 0.9 + s.size * 0.35 ? 0 : 1);
       p.x += Math.sin(s.yaw) * sp * dt; p.z += Math.cos(s.yaw) * sp * dt;
       p.y = heightAt(p.x, p.z);
       s.pivot.position.y = Math.abs(Math.sin(time * 18 + s.phase)) * 0.03 * s.size;
       s.pivot.rotation.z = Math.sin(time * 22 + s.phase) * 0.06;
       s.pivot.rotation.x = 0;
-      if (dist < s.jumpRange && dist > 1.0 && s.jumpCd <= 0 && player.alive) { s.state = 'crouch'; s.stateT = 0; }
+      if (dist < s.jumpRange && dist > 1.0 && s.jumpCd <= 0 && player.alive && !(s.slowT > 0 && Math.random() < 0.7)) { s.state = 'crouch'; s.stateT = 0; }
       // bosses call in their brood
       if (s.boss && game.wave >= 2 && (s.broodT -= dt) <= 0 && game.running) {
         s.broodT = Math.max(5, 10 - game.wave * 0.4);
@@ -685,6 +747,18 @@ function dropPickup(x, z, type, small = false) {
       new THREE.MeshStandardMaterial({ color: 0x5a6a34, roughness: 0.8 }), new THREE.MeshStandardMaterial({ color: 0x3a4620 }),
       new THREE.MeshStandardMaterial({ map: ammoTex }), new THREE.MeshStandardMaterial({ map: ammoTex }),
     ]);
+  } else if (type === 'spraycan') {
+    item = new THREE.Group(); for (let k = 0; k < 2; k++) { const c = makeSprayCan(); c.scale.setScalar(2); c.position.x = (k - 0.5) * 0.2; item.add(c); }
+  } else if (type === 'gascan') {
+    item = new THREE.Group();
+    const red = new THREE.MeshStandardMaterial({ color: 0xb01c14, roughness: 0.45, metalness: 0.3 });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.5, 0.18), red);
+    const handle = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.02, 6, 12, Math.PI), red); handle.position.set(-0.06, 0.25, 0);
+    const spout = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.14, 8), new THREE.MeshStandardMaterial({ color: 0xd8b020, metalness: 0.7 })); spout.position.set(0.15, 0.3, 0); spout.rotation.z = -0.6;
+    item.add(body, handle, spout);
+  } else if (type.startsWith('wpn_')) {
+    const w = WEAPONS[WI[type.slice(4)]];
+    item = new THREE.Group(); const m = new THREE.Mesh(w.mesh.geometry, w.mesh.material); m.scale.setScalar(1.1); m.rotation.y = Math.PI / 2; item.add(m);
   } else if (NADES[type]) {
     item = new THREE.Group();
     for (let k = 0; k < 2; k++) { const gm = NADES[type].mesh(); gm.scale.setScalar(type === 'molotov' ? 1.4 : 1.8); gm.position.x = (k - 0.5) * 0.3; item.add(gm); }
@@ -693,7 +767,7 @@ function dropPickup(x, z, type, small = false) {
     item = new THREE.Mesh(medGeo, mm);
   }
   item.castShadow = true;
-  const color = type === 'ammo' ? 0xc8ff60 : NADES[type] ? NADES[type].color : 0xff5050;
+  const color = type === 'ammo' ? 0xc8ff60 : NADES[type] ? NADES[type].color : type === 'spraycan' ? 0xe8ff40 : type === 'gascan' ? 0xff3a1a : type.startsWith('wpn_') ? 0xffe066 : 0xff5050;
   const beam = new THREE.Mesh(beamGeo, beamMat(color));
   const ring = new THREE.Mesh(ringGeo, beamMat(color)); ring.material.opacity = 0.6; ring.position.y = 0.05;
   g.add(item, beam, ring);
@@ -726,7 +800,7 @@ function updatePickups(dt) {
     if (dx * dx + dz * dz < 1.6 * 1.6 && Math.abs(player.pos.y - p.g.position.y) < 2.5) {
       if (collect(p)) {
         scene.remove(p.g); pickups.splice(i, 1);
-        if (!p.small) setTimeout(() => { if (game.running) { const [x, z] = randomPickupSpot(); dropPickup(x, z, p.type); } }, 25000);
+        if (!p.small && !p.type.startsWith('wpn_')) setTimeout(() => { if (game.running) { const [x, z] = randomPickupSpot(); dropPickup(x, z, p.type); } }, 25000);
       }
     }
   }
@@ -736,17 +810,24 @@ function collect(p) {
     if (player.hp >= 100) return false;
     const add = p.small ? 20 : 35; player.hp = Math.min(100, player.hp + add); sfx.heal(); toast(`+${add} HEALTH`, 'r'); return true;
   }
+  if (p.type.startsWith('wpn_')) { giveWeapon(p.type.slice(4), 'dropped by the boss'); return true; }
+  if (p.type === 'spraycan' || p.type === 'gascan') {
+    const w = WEAPONS[WI[p.type === 'spraycan' ? 'spray' : 'flame']];
+    if (!w.owned || w.reserve >= w.maxReserve) return false;
+    const add = p.small ? 50 : 100; w.reserve = Math.min(w.maxReserve, w.reserve + add);
+    sfx.pickup(); toast(`+${add}% ${p.type === 'spraycan' ? 'BUG SPRAY' : 'FUEL'}`, p.type === 'spraycan' ? 'g' : 'f'); return true;
+  }
   const N = NADES[p.type];
   if (N) {
     const have = player.nades[p.type];
     if (have >= N.max) return false;
     const add = Math.min(N.max - have, p.small ? 1 : 2); player.nades[p.type] += add;
     if (have === 0 && player.nades[player.nadeSel] === 0) player.nadeSel = p.type;
-    sfx.pickup(); toast(`+${add} ${N.label}${add > 1 ? 'S' : ''}  [${N.key} to select, G to throw]`, N.cls); return true;
+    sfx.pickup(); toast(`+${add} ${N.label}${add > 1 ? 'S' : ''}  [T to select, G to throw]`, N.cls); return true;
   }
   const mult = p.small ? 0.5 : 1; let got = [];
   for (const w of WEAPONS) {
-    if (w.reserve >= w.maxReserve) continue;
+    if (!w.owned || w.kind === 'spray' || w.kind === 'flame' || w.reserve >= w.maxReserve) continue;
     const add = Math.round(w.ammoPickup * mult); w.reserve = Math.min(w.maxReserve, w.reserve + add); got.push(`+${add} ${w.name}`);
   }
   if (!got.length) return false;
@@ -793,9 +874,9 @@ function makeMolotovMesh() {
 }
 // throwable types, in unlock order
 const NADES = {
-  stun:    { label: 'STUN GRENADE', short: 'STUN', key: '3', wave: 3, max: 4, color: 0x55ccff, cls: 'b', mesh: makeStunMesh, fuse: 1.6 },
-  frag:    { label: 'FRAG GRENADE', short: 'FRAG', key: '4', wave: 5, max: 6, color: 0xffb020, cls: 'o', mesh: makeGrenadeMesh, fuse: 2.2 },
-  molotov: { label: 'MOLOTOV', short: 'MOLOTOV', key: '5', wave: 8, max: 4, color: 0xff5a10, cls: 'f', mesh: makeMolotovMesh, fuse: 99 },
+  stun:    { label: 'STUN GRENADE', short: 'STUN', key: 'T', wave: 3, max: 4, color: 0x55ccff, cls: 'b', mesh: makeStunMesh, fuse: 1.6 },
+  frag:    { label: 'FRAG GRENADE', short: 'FRAG', key: 'T', wave: 5, max: 6, color: 0xffb020, cls: 'o', mesh: makeGrenadeMesh, fuse: 2.2 },
+  molotov: { label: 'MOLOTOV', short: 'MOLOTOV', key: 'T', wave: 8, max: 4, color: 0xff5a10, cls: 'f', mesh: makeMolotovMesh, fuse: 99 },
 };
 const NADE_ORDER = ['stun', 'frag', 'molotov'];
 function unlockedNades() { return NADE_ORDER.filter(t => game.wave >= NADES[t].wave); }
@@ -1006,8 +1087,14 @@ function startWave() {
   const count = 6 + game.wave * 4;
   game.toSpawn = count; game.remaining = count + 1; game.spawnT = 0; game.betweenT = 0; game.waveSize = count; game.bossSpawned = false;
   const unlock = NADE_ORDER.find(t => NADES[t].wave === game.wave);
-  banner(`WAVE ${game.wave}<small>${count} spiders + 1 boss incoming${unlock ? ` — spiders now drop ${NADES[unlock].label}S` : ''}</small>`, unlock ? 4 : 2.5);
+  const scatterLoot = (type, n) => { for (let i = 0; i < n; i++) { const [x, z] = randomPickupSpot(); dropPickup(x, z, type); } };
+  if (game.wave === 2) { giveWeapon('spray', 'short-range mist — shreds small spiders, slows the rest'); scatterLoot('spraycan', 10); }
+  if (game.wave === 6) { giveWeapon('flame', 'sets everything in front of you on fire — refuel with gas cans'); scatterLoot('gascan', 14); }
+  if (game.wave === 8) giveWeapon('awp', 'hold right-click to scope — bullets punch through spiders');
+  const waveBanner = () => banner(`WAVE ${game.wave}<small>${count} spiders + 1 boss incoming${unlock ? ` — spiders now drop ${NADES[unlock].label}S` : ''}</small>`, unlock ? 4 : 2.5);
   sfx.wave();
+  if (game.wave === 2 || game.wave === 6 || game.wave === 8) setTimeout(() => { if (game.running) waveBanner(); }, 3600);
+  else waveBanner();
 }
 
 function resetGame() {
@@ -1020,8 +1107,10 @@ function resetGame() {
   fires.length = 0; fireLight.intensity = 0;
   Object.assign(player, { hp: 100, alive: true, kills: 0, vy: 0, yaw: 0, pitch: 0 });
   player.pos.set(0, heightAt(0, 0), 0); player.knock.set(0, 0, 0);
-  WEAPONS[0].mag = 30; WEAPONS[0].reserve = 120; WEAPONS[1].mag = 7; WEAPONS[1].reserve = 35;
-  Object.assign(wstate, { cooldown: 0, reloading: 0, switching: 0, recoil: 0, kick: 0, nadeCd: 0, throwT: 0 });
+  for (const w of WEAPONS) { w.owned = w.key === 'rifle' || w.key === 'pistol'; w.mag = w.startMag; w.reserve = w.startReserve; }
+  for (const p of streamParts) { p.alive = false; p.sp.visible = false; }
+  setLoop('spray', 0); setLoop('flame', 0);
+  Object.assign(wstate, { cooldown: 0, reloading: 0, switching: 0, recoil: 0, kick: 0, nadeCd: 0, throwT: 0, scoped: false, scopeK: 0 });
   selectWeapon(0, true);
   seedPickups();
   game.wave = 0; game.betweenT = 2.5; game.toSpawn = 0; game.remaining = 0; game.running = true;
@@ -1037,7 +1126,7 @@ function damagePlayer(n, from, leap) {
   if (player.hp <= 0) { player.hp = 0; die(); }
 }
 function die() {
-  player.alive = false; game.running = false;
+  player.alive = false; game.running = false; setLoop('spray', 0); setLoop('flame', 0);
   setTimeout(() => {
     document.exitPointerLock();
     ui.overstats.innerHTML = `You survived to wave <b>${game.wave}</b> and squashed <b>${player.kills}</b> spiders.`;
@@ -1047,21 +1136,37 @@ function die() {
 
 // ---------- Weapons logic ----------
 function selectWeapon(i, instant = false) {
+  if (!WEAPONS[i] || !WEAPONS[i].owned) return;
   if (i === cur && !instant) return;
   WEAPONS[cur].group && (WEAPONS[cur].group.visible = false);
-  cur = i; wstate.reloading = 0; wstate.switching = instant ? 0 : 0.35;
+  if (i !== cur) prevWeapon = cur;
+  cur = i; wstate.reloading = 0; wstate.switching = instant ? 0 : 0.35; wstate.scoped = false;
   const w = WEAPONS[cur]; if (w.group) w.group.visible = true;
-  ui.slot1.classList.toggle('on', cur === 0); ui.slot2.classList.toggle('on', cur === 1);
+  renderSlots();
   if (!instant) sfx.switch();
+}
+function cycleWeapon(d) {
+  for (let k = 1; k <= WEAPONS.length; k++) { const i = (cur + d * k + WEAPONS.length * 2) % WEAPONS.length; if (WEAPONS[i].owned) { selectWeapon(i); return; } }
+}
+function renderSlots() {
+  ui.slots.innerHTML = WEAPONS.map((w, i) => w.owned ? `<span class="${i === cur ? 'on' : ''}">${i + 1} ${w.name}</span>` : '').join('');
+}
+function giveWeapon(key, msg) {
+  const w = WEAPONS[WI[key]];
+  if (w.owned) { w.reserve = w.maxReserve; toast(`${w.name} AMMO FULL`, 'g'); sfx.pickup(); return; }
+  w.owned = true; w.mag = w.magSize; w.reserve = w.startReserve;
+  sfx.gear(); banner(`${w.name} ACQUIRED<small>${msg || ''} — press ${WI[key] + 1}</small>`, 3.5);
+  selectWeapon(WI[key]);
 }
 function reload() {
   const w = WEAPONS[cur];
-  if (wstate.reloading > 0 || w.mag >= w.magSize || w.reserve <= 0 || wstate.switching > 0) return;
+  if (wstate.reloading > 0 || w.mag >= w.magSize - 0.5 || w.reserve <= 0 || wstate.switching > 0) return;
   wstate.reloading = w.reloadTime; sfx.reload();
 }
 function finishReload() {
   const w = WEAPONS[cur]; const need = w.magSize - w.mag, take = Math.min(need, w.reserve);
   w.mag += take; w.reserve -= take; sfx.reloadEnd();
+  if (w.kind !== 'gun' && w.kind !== 'sniper') w.mag = Math.round(w.mag);
 }
 
 const ray = new THREE.Ray();
@@ -1075,15 +1180,17 @@ function fire() {
   vmFlashLight.intensity = 6; vmFlashLight.position.copy(w.group.position).add(new THREE.Vector3(0, 0, -w.len * 0.5));
   flashLight.intensity = 30; flashLight.position.copy(camera.position);
   ejectShell(w);
+  if (w.kind === 'sniper') { flashLight.intensity = 60; shake(0.25); }
 
   // hitscan
   const moving = (keys.KeyW || keys.KeyA || keys.KeyS || keys.KeyD) ? w.moveSpread : 0;
-  const sp = w.spread + moving + wstate.spreadHeat + (player.onGround ? 0 : 0.04);
+  let sp = w.spread + moving + wstate.spreadHeat + (player.onGround ? 0 : 0.04);
+  if (w.kind === 'sniper') sp = wstate.scopeK > 0.8 ? (moving ? 0.01 : 0) : 0.06 + moving;
   wstate.spreadHeat = Math.min(0.03, wstate.spreadHeat + (w.auto ? 0.004 : 0.01));
   const dir = new THREE.Vector3(rr(-sp, sp), rr(-sp, sp), -1).normalize().applyQuaternion(camera.quaternion);
   ray.set(camera.position, dir);
   let best = Infinity, target = null, kind = 'dust';
-
+  const hits = [];
   for (const s of spiders) {
     if (s.dead) continue;
     const r = Math.max(0.36 * s.size, 0.1);
@@ -1092,8 +1199,10 @@ function fire() {
     if (tca < 0) continue;
     const d2 = oc.lengthSq() - tca * tca; if (d2 > r * r) continue;
     const t = tca - Math.sqrt(r * r - d2);
+    hits.push({ s, t });
     if (t < best) { best = t; target = s; }
   }
+  if (w.pierce) best = Infinity; // the AWP punches through spiders; only terrain/trees stop it
   // tree trunks (2D ray vs circle)
   const dh = Math.hypot(dir.x, dir.z);
   if (dh > 1e-4) for (const c of colliders) {
@@ -1112,6 +1221,20 @@ function fire() {
   const hitPoint = ray.at(Math.min(best, 150), new THREE.Vector3());
   const muzzleWorld = camera.localToWorld(new THREE.Vector3(0.18, -0.12, -0.6));
   tracer(muzzleWorld, hitPoint);
+  if (w.pierce) {
+    hits.sort((a, b) => a.t - b.t);
+    let dmg = w.dmg, any = false, kills = false;
+    for (const h of hits) {
+      if (h.t > best) break;
+      const s = h.s; s.hp -= dmg; s.flash = 0.2; any = true;
+      burst(ray.at(h.t, new THREE.Vector3()), 'blood', 10 + Math.round(10 * s.size), 4, 0.03 + 0.04 * s.size);
+      if (s.hp <= 0) { s.airborne = s.state === 'air'; s.vel.set(dir.x * 6, 3, dir.z * 6); s.airborne = true; killSpider(s); kills = true; }
+      dmg *= 0.8;
+    }
+    if (any) { sfx.hit(); showHit(kills); }
+    if (best < 150) burst(hitPoint, kind, 8, 3, 0.03);
+    return;
+  }
 
   if (target) {
     // falloff for pistol at range is small; rifle keeps damage
@@ -1149,26 +1272,24 @@ document.addEventListener('pointerlockchange', () => {
 });
 document.addEventListener('mousemove', (e) => {
   if (document.pointerLockElement !== canvas || !player.alive) return;
-  player.yaw -= e.movementX * 0.0022; player.pitch -= e.movementY * 0.0022;
+  const sens = 0.0022 * (1 - 0.75 * wstate.scopeK);
+  player.yaw -= e.movementX * sens; player.pitch -= e.movementY * sens;
   player.pitch = clamp(player.pitch, -1.5, 1.5);
 });
-document.addEventListener('mousedown', (e) => { if (document.pointerLockElement !== canvas) return; if (e.button === 0) wstate.mouseDown = true; if (e.button === 2 && game.running && !game.paused) throwGrenade(); });
+document.addEventListener('mousedown', (e) => { if (document.pointerLockElement !== canvas) return; if (e.button === 0) wstate.mouseDown = true; if (e.button === 2 && game.running && !game.paused) { if (WEAPONS[cur].kind === 'sniper') wstate.scoped = true; else throwGrenade(); } });
 document.addEventListener('contextmenu', (e) => e.preventDefault());
-document.addEventListener('mouseup', (e) => { if (e.button === 0) { wstate.mouseDown = false; wstate.triggerReleased = true; } });
+document.addEventListener('mouseup', (e) => { if (e.button === 0) { wstate.mouseDown = false; wstate.triggerReleased = true; } if (e.button === 2) wstate.scoped = false; });
 let lastWheel = 0;
-document.addEventListener('wheel', () => { const n = performance.now(); if (document.pointerLockElement === canvas && n - lastWheel > 250) { lastWheel = n; selectWeapon(cur === 0 ? 1 : 0); } });
+document.addEventListener('wheel', (e) => { const n = performance.now(); if (document.pointerLockElement === canvas && n - lastWheel > 250) { lastWheel = n; cycleWeapon(e.deltaY > 0 ? 1 : -1); } });
 addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (!game.running || game.paused) return;
   if (e.code === 'KeyR') reload();
-  if (e.code === 'Digit1') selectWeapon(0);
-  if (e.code === 'Digit2') selectWeapon(1);
-  if (e.code === 'KeyQ') selectWeapon(cur === 0 ? 1 : 0);
+  const dg = /^Digit([1-6])$/.exec(e.code); if (dg) selectWeapon(+dg[1] - 1);
+  if (e.code === 'KeyQ') selectWeapon(WEAPONS[prevWeapon].owned ? prevWeapon : (cur === 0 ? 1 : 0));
   if (e.code === 'KeyG') throwGrenade();
   if (e.code === 'KeyT') selectNade();
-  if (e.code === 'Digit3') selectNade('stun');
-  if (e.code === 'Digit4') selectNade('frag');
-  if (e.code === 'Digit5') selectNade('molotov');
+
   if (e.code === 'Space') e.preventDefault();
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; });
@@ -1228,16 +1349,82 @@ function updatePlayer(dt) {
   return hs;
 }
 
+const streamParts = [];
+const mistTex = canvasTex(64, 64, (x) => { const g = x.createRadialGradient(32, 32, 0, 32, 32, 32); g.addColorStop(0, 'rgba(255,255,255,.9)'); g.addColorStop(1, 'rgba(255,255,255,0)'); x.fillStyle = g; x.fillRect(0, 0, 64, 64); });
+function emitStream(w, dt, dir, origin) {
+  const flame = w.kind === 'flame', n = Math.ceil(dt * (flame ? 90 : 70));
+  for (let k = 0; k < n; k++) {
+    let p = streamParts.find(q => !q.alive);
+    if (!p) { if (streamParts.length > 260) break; p = { sp: new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthWrite: false })), vel: new THREE.Vector3() }; scene.add(p.sp); streamParts.push(p); }
+    p.alive = true; p.flame = flame; p.t = 0; p.life = flame ? rr(0.45, 0.65) : rr(0.35, 0.55);
+    const m = p.sp.material;
+    m.map = flame ? fireTex : mistTex; m.blending = flame ? THREE.AdditiveBlending : THREE.NormalBlending; m.color.setHex(flame ? 0xffffff : 0xdcf5d0); m.needsUpdate = true;
+    p.sp.visible = true; p.sp.position.copy(origin).addScaledVector(dir, Math.random() * 0.3);
+    const spd = flame ? rr(15, 19) : rr(10, 13), c = w.cone * 0.8;
+    p.vel.copy(dir).multiplyScalar(spd).add(new THREE.Vector3(rr(-c, c) * spd, rr(-c, c) * spd + (flame ? 0.5 : 0), rr(-c, c) * spd));
+  }
+}
+function updateStream(dt) {
+  for (const p of streamParts) {
+    if (!p.alive) continue;
+    p.t += dt; const k = p.t / p.life;
+    p.vel.multiplyScalar(1 - dt * (p.flame ? 1.5 : 2.5)); if (p.flame) p.vel.y += dt * 4;
+    p.sp.position.addScaledVector(p.vel, dt);
+    const gy = heightAt(p.sp.position.x, p.sp.position.z); if (p.sp.position.y < gy + 0.1) { p.sp.position.y = gy + 0.1; p.vel.y = Math.abs(p.vel.y) * 0.2; }
+    const sc = p.flame ? 0.15 + k * 1.6 : 0.1 + k * 1.1; p.sp.scale.set(sc, sc, 1);
+    p.sp.material.opacity = p.flame ? (1 - k) * 0.95 : (1 - k) * 0.35;
+    p.sp.material.rotation += dt * 2;
+    if (k >= 1) { p.alive = false; p.sp.visible = false; }
+  }
+}
+function streamTick(w, dt) {
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  const origin = camera.localToWorld(_v.set(w.pos.x, w.pos.y + w.muzzleLocal.y, w.pos.z + w.muzzleLocal.z - 0.05)).clone();
+  emitStream(w, dt, dir, origin);
+  let hitAny = false, killed = false;
+  for (const s of spiders) {
+    if (s.dead) continue;
+    const c = _v2.copy(s.root.position); c.y += 0.14 * s.size;
+    const v = c.sub(camera.position), d = v.length();
+    if (d > w.range + 0.4 * s.size || d < 1e-3) continue;
+    const ang = Math.acos(clamp(v.dot(dir) / d, -1, 1));
+    if (ang > w.cone + Math.atan((0.35 * s.size) / d)) continue;
+    const falloff = 1 - 0.4 * (d / w.range);
+    if (w.kind === 'spray') { s.hp -= w.dps * clamp(1.25 - s.t, 0.2, 1.25) * (s.boss ? 0.15 : 1) * falloff * dt; s.slowT = 1.5; }
+    else { s.hp -= w.dps * (s.boss ? 0.85 : 1) * falloff * dt; s.burnT = 3; }
+    s.flash = Math.max(s.flash, 0.05); hitAny = true;
+    if (s.hp <= 0) { s.airborne = s.state === 'air'; killSpider(s); killed = true; }
+  }
+  if (hitAny && Math.random() < dt * 8) showHit(killed); else if (killed) showHit(true);
+  if (w.kind === 'flame') { flashLight.position.copy(origin).addScaledVector(dir, 2.5); flashLight.intensity = 14 + Math.random() * 8; }
+}
+
 function updateWeapon(dt, hs, time) {
   const w = WEAPONS[cur];
   wstate.cooldown -= dt; wstate.spreadHeat = Math.max(0, wstate.spreadHeat - dt * 0.08);
   if (wstate.switching > 0) wstate.switching -= dt;
   wstate.nadeCd -= dt; if (wstate.throwT > 0) wstate.throwT -= dt;
   if (wstate.reloading > 0) { wstate.reloading -= dt; if (wstate.reloading <= 0) finishReload(); }
-  if (player.alive && !game.paused && wstate.mouseDown && wstate.cooldown <= 0 && wstate.reloading <= 0 && wstate.switching <= 0) {
+  const canShoot = player.alive && !game.paused && wstate.mouseDown && wstate.reloading <= 0 && wstate.switching <= 0;
+  let streaming = false;
+  if (w.kind === 'spray' || w.kind === 'flame') {
+    if (canShoot && w.mag > 0) { w.mag = Math.max(0, w.mag - w.use * dt); streamTick(w, dt); streaming = true; }
+    else if (canShoot && w.mag <= 0) { if (w.reserve > 0) reload(); else if (wstate.triggerReleased) { sfx.empty(); wstate.triggerReleased = false; } }
+  } else if (canShoot && wstate.cooldown <= 0) {
     if (w.auto || wstate.triggerReleased) { fire(); wstate.triggerReleased = false; }
   }
-  if (w.mag === 0 && w.reserve > 0 && wstate.reloading <= 0 && wstate.cooldown <= 0 && !wstate.mouseDown) reload();
+  setLoop('spray', streaming && w.kind === 'spray' ? 0.25 : 0);
+  setLoop('flame', streaming && w.kind === 'flame' ? 0.6 : 0);
+  updateStream(dt);
+  // AWP scope
+  const wantScope = wstate.scoped && w.kind === 'sniper' && wstate.reloading <= 0 && wstate.switching <= 0 && player.alive;
+  wstate.scopeK = clamp(wstate.scopeK + (wantScope ? dt * 7 : -dt * 9), 0, 1);
+  const fov = lerp(75, 17, wstate.scopeK);
+  if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
+  ui.scope.style.opacity = wstate.scopeK > 0.7 ? 1 : 0;
+  ui.cross.style.opacity = wstate.scopeK > 0.2 ? 0 : 1;
+  vmRoot.visible = wstate.scopeK < 0.6;
+  if (w.mag <= 0 && w.reserve > 0 && wstate.reloading <= 0 && wstate.cooldown <= 0 && !wstate.mouseDown) reload();
 
   // viewmodel animation
   wstate.kick = Math.max(0, wstate.kick - dt * 12);
@@ -1249,6 +1436,7 @@ function updateWeapon(dt, hs, time) {
   g.position.set(w.pos.x + bobx, w.pos.y + boby - rl * 0.12 - sw * 0.3 - (sprint ? 0.04 : 0), w.pos.z + wstate.kick * w.kick);
   g.rotation.set(wstate.kick * 0.08 + rl * 0.5 - (sprint ? 0.2 : 0), (sprint ? 0.6 : 0.03), rl * 0.6 + (sprint ? 0.3 : 0));
   g.position.x += Math.sin(time * 1.3) * 0.002; g.position.y += Math.sin(time * 1.7) * 0.002; // idle sway
+  if (streaming) { g.position.x += rr(-0.002, 0.002); g.position.y += rr(-0.002, 0.002); }
 
   if (w.flashT > 0) { w.flashT -= dt; if (w.flashT <= 0) w.flash.visible = false; }
   vmFlashLight.intensity = Math.max(0, vmFlashLight.intensity - dt * 120);
@@ -1283,15 +1471,15 @@ let lastHud = '';
 function updateHud() {
   const w = WEAPONS[cur];
   if (game.boss) ui.bossfill.style.width = `${Math.max(0, game.boss.hp / game.boss.maxHp * 100)}%`;
-  const s = `${game.wave}|${game.remaining}|${player.kills}|${Math.ceil(player.hp)}|${w.mag}|${w.reserve}|${cur}|${wstate.reloading > 0}|${JSON.stringify(player.nades)}|${player.nadeSel}`;
+  const s = `${game.wave}|${game.remaining}|${player.kills}|${Math.ceil(player.hp)}|${Math.ceil(w.mag)}|${w.reserve}|${cur}|${wstate.reloading > 0}|${JSON.stringify(player.nades)}|${player.nadeSel}`;
   if (s !== lastHud) {
     lastHud = s;
     ui.wave.textContent = game.wave; ui.left.textContent = Math.max(0, game.remaining); ui.kills.textContent = player.kills;
     ui.hpfill.style.width = `${player.hp}%`; ui.hptext.textContent = Math.ceil(player.hp);
-    ui.mag.textContent = w.mag; ui.mag.classList.toggle('low', w.mag <= Math.ceil(w.magSize * 0.25));
-    ui.reserve.textContent = `/ ${w.reserve}`; ui.wname.textContent = w.name;
-    ui.nadeRow.innerHTML = NADE_ORDER.map(t => `<span class="nd ${NADES[t].cls}${player.nadeSel === t ? ' sel' : ''}${player.nades[t] ? '' : ' none'}">${NADES[t].key} ${NADES[t].short} <b>${player.nades[t]}</b></span>`).join('');
-    ui.reloadhint.textContent = wstate.reloading > 0 ? 'RELOADING…' : (w.mag === 0 && w.reserve === 0 ? 'NO AMMO — SWITCH / FIND CRATES' : (w.mag <= w.magSize * 0.25 ? 'PRESS R TO RELOAD' : ''));
+    ui.mag.textContent = Math.ceil(w.mag) + (w.unit ? '%' : ''); ui.mag.classList.toggle('low', w.mag <= Math.ceil(w.magSize * 0.25));
+    ui.reserve.textContent = w.unit ? `/ ${w.reserve}% ${w.unit}` : `/ ${w.reserve}`; ui.wname.textContent = w.name;
+    ui.nadeRow.innerHTML = NADE_ORDER.map(t => `<span class="nd ${NADES[t].cls}${player.nadeSel === t ? ' sel' : ''}${player.nades[t] ? '' : ' none'}">${NADES[t].short} <b>${player.nades[t]}</b></span>`).join('') + '<span class="nd hint">T / G</span>';
+    ui.reloadhint.textContent = wstate.reloading > 0 ? 'RELOADING…' : (w.mag <= 0 && w.reserve <= 0 ? (w.kind === 'flame' ? 'NO FUEL — FIND GAS CANS' : w.kind === 'spray' ? 'EMPTY — FIND SPRAY CANS' : 'NO AMMO — SWITCH / FIND CRATES') : (w.mag <= w.magSize * 0.25 ? 'PRESS R TO RELOAD' : ''));
   }
   ui.vignette.style.opacity = Math.max(player.hurtT * 0.9, player.hp < 30 ? 0.35 + Math.sin(performance.now() / 250) * 0.1 : 0);
 }
@@ -1343,9 +1531,10 @@ function tick(dt) {
 // ============================================================
 (async function boot() {
   try {
-    const [sg, rg, pg] = await Promise.all([loadGeo('spider.stl'), loadGeo('m4a1.stl'), loadGeo('m1911.stl')]);
+    const [sg, rg, pg, smg, fg, ag] = await Promise.all(['spider.stl', 'm4a1.stl', 'm1911.stl', 'ppd40.stl', 'flamethrower.stl', 'awp.stl'].map(loadGeo));
     spiderGeo = sg;
-    buildWeapon(WEAPONS[0], rg); buildWeapon(WEAPONS[1], pg);
+    buildWeapon(WEAPONS[0], rg); buildWeapon(WEAPONS[1], pg); buildWeapon(WEAPONS[WI.spray], makeSprayCan());
+    buildWeapon(WEAPONS[WI.smg], smg); buildWeapon(WEAPONS[WI.flame], fg); buildWeapon(WEAPONS[WI.awp], ag);
     // decorative spiders for the menu
     for (let i = 0; i < 5; i++) { const s = makeSpider([0.2, 0.35, 0.5, 0.7, 0.95][i]); const a = i / 5 * 6.28; s.root.position.set(Math.cos(a) * 3, 0, Math.sin(a) * 3); s.root.position.y = heightAt(s.root.position.x, s.root.position.z); s.jumpCd = 999; spiders.push(s); }
     seedPickups();
@@ -1357,4 +1546,4 @@ function tick(dt) {
 })();
 
 // expose for debugging
-window.__game = { game, player, spiders, WEAPONS, camera, renderer, spawnSpider, makeSpider, heightAt, tick, keys, wstate, pickups, spawnBoss, throwGrenade, grenades, dropPickup, fires, selectNade };
+window.__game = { game, player, spiders, WEAPONS, camera, renderer, spawnSpider, makeSpider, heightAt, tick, keys, wstate, pickups, spawnBoss, throwGrenade, grenades, dropPickup, fires, selectNade, giveWeapon, WI, get cur() { return cur; } };
