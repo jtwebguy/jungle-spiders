@@ -71,8 +71,15 @@ kbd { background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.25)
 #bossname { font-size: 14px; letter-spacing: 4px; font-weight: 800; color: #ff6a55; text-shadow: 0 1px 6px #000; margin-bottom: 4px; }
 #bossbar .bar { height: 10px; background: rgba(0,0,0,.5); border: 1px solid rgba(255,90,70,.6); border-radius: 5px; overflow: hidden; }
 #bossfill { height: 100%; width: 100%; background: linear-gradient(90deg, #8b0000, #ff3b2f); transition: width .15s; }
-#nadebox { font-size: 12px; letter-spacing: 2px; color: #ffb020; margin-top: 4px; }
-#nadebox b { font-size: 18px; }
-#nadebox.none { opacity: .35; }
 .toast.o { color: #ffc24a; }
 .tip .o { color: #ffc24a; }
+
+#naderow { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; font-size: 11px; letter-spacing: 1px; }
+#naderow .nd { padding: 2px 6px; border: 1px solid transparent; border-radius: 4px; }
+#naderow .nd b { font-size: 15px; }
+#naderow .nd.sel { border-color: currentColor; background: rgba(255,255,255,.08); }
+#naderow .nd.none { opacity: .3; }
+.nd.b, .toast.b, .tip .b { color: #7fd8ff; }
+.nd.o { color: #ffc24a; }
+.nd.f, .toast.f, .tip .f { color: #ff8040; }
+#flash { position: fixed; inset: 0; pointer-events: none; z-index: 6; background: #f4fbff; opacity: 0; }

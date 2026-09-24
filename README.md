@@ -18,7 +18,8 @@ scattered through the jungle (look for the light beams).
 | Shift | Sprint |
 | Space | Jump |
 | R | Reload |
-| G / Right click | Throw grenade |
+| G / Right click | Throw selected throwable |
+| 3 / 4 / 5 or T | Select stun grenade / frag grenade / molotov (T cycles) |
 | 1 / 2 / Q / Mouse wheel | Switch weapon |
 | Esc | Pause |
 
@@ -27,7 +28,10 @@ scattered through the jungle (look for the light beams).
 - **Spiders**: sizes range from ~15 cm (mouse) to ~1 m (dog). Small ones are fast and die in one hit; big ones are tanky and hit hard. They skitter toward you, crouch, then leap in an arc aimed at your head. Later waves bring more of the big ones.
 - **Weapons**: M4A1-S — 30-round mag, 34 dmg. M1911 — 7-round mag, 55 dmg, very accurate.
 - **Bosses**: every wave has a boss spider that arrives mid-wave — each one bigger than the last (1.5 m leg span on wave 1, 3.7 m on wave 5, 6.5 m on wave 10 and still growing). Bosses leap and slam the ground with a shockwave, call in swarms of babies from wave 2, and drop loot when they die.
-- **Grenades**: from wave 5, dead spiders (and bosses) drop grenades. Carry up to 6. They bounce, blow up after ~2 s and send spiders flying — keep your distance.
+- **Throwables** (random drops from dead spiders; bosses drop one of each unlocked type):
+  - **Stun grenade** (from wave 3, carry 4): blinding flash after ~1.6 s. Every spider within 10 m — even ones mid-leap — drops and twitches helplessly for 5 s (bosses 3 s). Don't look at it up close.
+  - **Frag grenade** (from wave 5, carry 6): bounces, explodes after ~2 s, sends spiders flying. Keep your distance.
+  - **Molotov** (from wave 8, carry 4): shatters on impact into an 8-second pool of fire that burns anything walking through it — and sets spiders alight. Don't stand in it yourself.
 - **Pickups**: ammo crates refill both guns, med kits heal 35 HP. They respawn elsewhere 25 s after pickup, and dead spiders sometimes drop small ones.
 
 ## Running locally

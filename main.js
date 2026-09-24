@@ -20,7 +20,7 @@ const ui = {
   wname: $('wname'), reloadhint: $('reloadhint'), slot1: $('slot1'), slot2: $('slot2'),
   toasts: $('toasts'), vignette: $('vignette'), hit: $('hitmarker'),
   cross: $('crosshair'), overstats: $('overstats'),
-  bossbar: $('bossbar'), bossname: $('bossname'), bossfill: $('bossfill'), nades: $('nades'),
+  flash: $('flash'), nadeRow: $('naderow'), bossbar: $('bossbar'), bossname: $('bossname'), bossfill: $('bossfill'), nades: $('nades'),
 };
 
 // ---------- Renderer / scenes ----------
@@ -73,6 +73,7 @@ scene.add(flashLight);
 // persistent lights (adding/removing lights at runtime forces shader recompiles = stutter)
 const boomLight = new THREE.PointLight(0xff8830, 0, 30, 2); scene.add(boomLight);
 const bossLight = new THREE.PointLight(0xff2200, 0, 10, 2); scene.add(bossLight);
+const fireLight = new THREE.PointLight(0xff7a20, 0, 16, 2); scene.add(fireLight);
 
 // ---------- Utils ----------
 let seed = 1337;
@@ -292,6 +293,9 @@ const sfx = {
   switch() { noise(0.08, { type: 'bandpass', freq: 1500, vol: 0.25 }); },
   roar() { tone(70, 1.1, { vol: 0.45, type: 'sawtooth', to: 40, attack: 0.1 }); tone(95, 1.0, { vol: 0.3, type: 'square', to: 55, attack: 0.1 }); noise(1.0, { type: 'bandpass', freq: 500, q: 2, vol: 0.4, attack: 0.1, decay: 0.9 }); },
   boom(v = 1) { noise(1.4, { freq: 300, vol: 0.9 * v, decay: 1.3 }); noise(0.4, { freq: 3000, vol: 0.5 * v, decay: 0.3 }); tone(60, 0.9, { to: 25, vol: 0.7 * v, type: 'sine' }); },
+  stun() { noise(0.6, { type: 'highpass', freq: 2500, vol: 0.9, decay: 0.5 }); tone(3200, 1.6, { vol: 0.12, to: 3000 }); tone(90, 0.3, { to: 40, vol: 0.5 }); },
+  ignite(v = 1) { noise(0.9 * v + 0.2, { type: 'lowpass', freq: 900, vol: 0.5 * v, attack: 0.05, decay: 0.9 * v + 0.2 }); },
+  glass() { for (let i = 0; i < 5; i++) tone(rr(2500, 5000), 0.08, { vol: 0.08, type: 'triangle', when: i * 0.03 }); noise(0.15, { type: 'highpass', freq: 4000, vol: 0.4 }); },
   pin() { tone(2400, 0.04, { vol: 0.12, type: 'square' }); noise(0.05, { type: 'highpass', freq: 5000, vol: 0.2, when: 0.05 }); },
   bounce() { tone(900, 0.04, { vol: 0.08, type: 'triangle', to: 600 }); },
   wave() { tone(110, 0.9, { vol: 0.3, type: 'sawtooth', to: 80 }); tone(165, 0.9, { vol: 0.2, type: 'sawtooth', to: 120 }); },
@@ -331,6 +335,7 @@ const partMats = {
   dust: new THREE.MeshBasicMaterial({ color: 0x6a5a40 }),
   leaf: new THREE.MeshBasicMaterial({ color: 0x3f6a22 }),
   spark: new THREE.MeshBasicMaterial({ color: 0xffd080 }),
+  zap: new THREE.MeshBasicMaterial({ color: 0x9fe6ff }),
 };
 function burst(pos, kind, n, speed = 3, size = 0.04) {
   for (let i = 0; i < n; i++) {
@@ -377,7 +382,7 @@ function splat(x, z, s) {
 const keys = {};
 const player = {
   pos: new THREE.Vector3(0, 0, 0), vy: 0, onGround: true, yaw: 0, pitch: 0,
-  hp: 100, alive: true, kills: 0, grenades: 0, bob: 0, hurtT: 0, knock: new THREE.Vector3(),
+  hp: 100, alive: true, kills: 0, nades: { stun: 0, frag: 0, molotov: 0 }, nadeSel: 'frag', bob: 0, hurtT: 0, knock: new THREE.Vector3(),
 };
 
 const WEAPONS = [
@@ -402,6 +407,12 @@ const flashTex = canvasTex(64, 64, (x) => {
   const g = x.createRadialGradient(32, 32, 0, 32, 32, 32); g.addColorStop(0, 'rgba(255,255,220,1)'); g.addColorStop(0.3, 'rgba(255,190,80,.9)'); g.addColorStop(1, 'rgba(255,120,0,0)');
   x.fillStyle = g; x.fillRect(0, 0, 64, 64);
   x.strokeStyle = 'rgba(255,230,160,.8)'; x.lineWidth = 3; for (let i = 0; i < 6; i++) { const a = i / 6 * 6.28; x.beginPath(); x.moveTo(32, 32); x.lineTo(32 + Math.cos(a) * 31, 32 + Math.sin(a) * 31); x.stroke(); }
+});
+
+const fireTex = canvasTex(64, 64, (x) => {
+  const g = x.createRadialGradient(32, 40, 2, 32, 36, 30);
+  g.addColorStop(0, 'rgba(255,250,210,1)'); g.addColorStop(0.25, 'rgba(255,200,70,.95)'); g.addColorStop(0.6, 'rgba(255,90,10,.6)'); g.addColorStop(1, 'rgba(120,20,0,0)');
+  x.fillStyle = g; x.beginPath(); x.moveTo(32, 2); x.quadraticCurveTo(58, 34, 50, 52); x.quadraticCurveTo(32, 66, 14, 52); x.quadraticCurveTo(6, 34, 32, 2); x.fill();
 });
 
 function buildWeapon(w, geo) {
@@ -457,7 +468,7 @@ function makeSpider(size) {
     dmg: Math.round(4 + 18 * t),
     jumpRange: lerp(3.5, 8, t), jumpCd: rr(0.5, 2),
     state: 'walk', stateT: 0, vel: new THREE.Vector3(), yaw: 0, phase: Math.random() * 10,
-    hitCd: 0, flash: 0, dead: false, deadT: 0, airHit: false, boss: false, broodT: 6,
+    hitCd: 0, flash: 0, dead: false, deadT: 0, airHit: false, boss: false, broodT: 6, stunT: 0, burnT: 0,
   };
 }
 
@@ -518,11 +529,12 @@ function killSpider(s) {
     game.boss = null; ui.bossbar.classList.add('hidden');
     banner(`${s.name.toUpperCase()} SLAIN`, 2.5); shake(0.6);
     dropPickup(px + 1.5, pz, 'health'); dropPickup(px - 1.5, pz, 'ammo');
-    if (game.wave >= 5) { dropPickup(px, pz + 1.5, 'grenade'); dropPickup(px, pz - 1.5, 'grenade'); }
+    unlockedNades().forEach((t, k, arr) => { const a = k / arr.length * 6.28 + 0.8; dropPickup(px + Math.cos(a) * 1.8, pz + Math.sin(a) * 1.8, t); });
     return;
   }
-  // chance to drop a small pickup — grenades start dropping from wave 5
-  if (game.wave >= 5 && Math.random() < 0.14 + 0.1 * s.t) dropPickup(px, pz, 'grenade', true);
+  // random throwable drop: stun from wave 3, frag from wave 5, molotov from wave 8
+  const un = unlockedNades();
+  if (un.length && Math.random() < 0.14 + 0.1 * s.t) dropPickup(px, pz, un[Math.floor(Math.random() * un.length)], true);
   else if (Math.random() < 0.12 + 0.2 * s.t) dropPickup(px, pz, Math.random() < 0.6 ? 'ammo' : 'health', true);
 }
 
@@ -542,7 +554,20 @@ function updateSpiders(dt, time) {
       continue;
     }
     s.hitCd -= dt; s.jumpCd -= dt; s.stateT += dt;
-    if (s.flash > 0) { s.flash -= dt; s.mat.emissive.setRGB(s.flash * 3, 0, 0); } else s.mat.emissive.setRGB(0, 0, 0);
+    if (s.flash > 0) s.flash -= dt;
+    if (s.burnT > 0) { s.burnT -= dt; s.hp -= 14 * dt; if (Math.random() < dt * 12) burst(_v.copy(p).setY(p.y + 0.2 * s.size), 'spark', 1, 1.2, 0.02 + 0.02 * s.size); if (s.hp <= 0) { killSpider(s); continue; } }
+    const fl = Math.max(0, s.flash) * 3, bn = s.burnT > 0 ? 0.5 + Math.sin(time * 30 + s.phase) * 0.2 : 0, st = s.stunT > 0 ? 0.25 + 0.25 * Math.max(0, Math.sin(time * 25 + s.phase)) : 0;
+    s.mat.emissive.setRGB(fl + bn, bn * 0.35 + st * 0.8, st);
+    if (s.stunT > 0) {
+      // stunned: fall out of the air, twitch helplessly, no attacks
+      s.stunT -= dt;
+      if (s.airborne) { s.vel.y -= GRAVITY * dt; p.addScaledVector(s.vel, dt); const gy0 = heightAt(p.x, p.z); if (p.y <= gy0) { p.y = gy0; s.airborne = false; s.state = 'walk'; } }
+      else p.y = heightAt(p.x, p.z);
+      s.pivot.rotation.z = Math.sin(time * 40 + s.phase) * 0.15; s.pivot.rotation.x = 0; s.pivot.position.y = 0;
+      s.yaw += Math.sin(time * 6 + s.phase) * dt * 2; s.root.rotation.y = s.yaw;
+      s.jumpCd = Math.max(s.jumpCd, 0.8); s.hitCd = Math.max(s.hitCd, 0.5);
+      continue;
+    }
 
     const dx = pp.x - p.x, dz = pp.z - p.z, dist = Math.hypot(dx, dz);
     const targetYaw = Math.atan2(dx, dz);
@@ -660,15 +685,15 @@ function dropPickup(x, z, type, small = false) {
       new THREE.MeshStandardMaterial({ color: 0x5a6a34, roughness: 0.8 }), new THREE.MeshStandardMaterial({ color: 0x3a4620 }),
       new THREE.MeshStandardMaterial({ map: ammoTex }), new THREE.MeshStandardMaterial({ map: ammoTex }),
     ]);
-  } else if (type === 'grenade') {
+  } else if (NADES[type]) {
     item = new THREE.Group();
-    for (let k = 0; k < 2; k++) { const gm = makeGrenadeMesh(); gm.scale.setScalar(1.8); gm.position.x = (k - 0.5) * 0.28; item.add(gm); }
+    for (let k = 0; k < 2; k++) { const gm = NADES[type].mesh(); gm.scale.setScalar(type === 'molotov' ? 1.4 : 1.8); gm.position.x = (k - 0.5) * 0.3; item.add(gm); }
   } else {
     const mm = new THREE.MeshStandardMaterial({ map: medTex, roughness: 0.5 });
     item = new THREE.Mesh(medGeo, mm);
   }
   item.castShadow = true;
-  const color = type === 'ammo' ? 0xc8ff60 : type === 'grenade' ? 0xffb020 : 0xff5050;
+  const color = type === 'ammo' ? 0xc8ff60 : NADES[type] ? NADES[type].color : 0xff5050;
   const beam = new THREE.Mesh(beamGeo, beamMat(color));
   const ring = new THREE.Mesh(ringGeo, beamMat(color)); ring.material.opacity = 0.6; ring.position.y = 0.05;
   g.add(item, beam, ring);
@@ -711,10 +736,13 @@ function collect(p) {
     if (player.hp >= 100) return false;
     const add = p.small ? 20 : 35; player.hp = Math.min(100, player.hp + add); sfx.heal(); toast(`+${add} HEALTH`, 'r'); return true;
   }
-  if (p.type === 'grenade') {
-    if (player.grenades >= MAX_NADES) return false;
-    const add = Math.min(MAX_NADES - player.grenades, p.small ? 1 : 2); player.grenades += add;
-    sfx.pickup(); toast(`+${add} GRENADE${add > 1 ? 'S' : ''}  [G / right-click]`, 'o'); return true;
+  const N = NADES[p.type];
+  if (N) {
+    const have = player.nades[p.type];
+    if (have >= N.max) return false;
+    const add = Math.min(N.max - have, p.small ? 1 : 2); player.nades[p.type] += add;
+    if (have === 0 && player.nades[player.nadeSel] === 0) player.nadeSel = p.type;
+    sfx.pickup(); toast(`+${add} ${N.label}${add > 1 ? 'S' : ''}  [${N.key} to select, G to throw]`, N.cls); return true;
   }
   const mult = p.small ? 0.5 : 1; let got = [];
   for (const w of WEAPONS) {
@@ -734,8 +762,7 @@ function shake(a) { shakeAmt = Math.min(1.5, shakeAmt + a); }
 // ============================================================
 //  Grenades
 // ============================================================
-const MAX_NADES = 6;
-const grenades = [], explosions = [];
+const grenades = [], explosions = [], fires = [];
 function makeGrenadeMesh() {
   const g = new THREE.Group();
   const body = new THREE.Mesh(new THREE.SphereGeometry(0.07, 12, 10), new THREE.MeshStandardMaterial({ color: 0x3d4a26, roughness: 0.7 }));
@@ -746,14 +773,51 @@ function makeGrenadeMesh() {
   g.add(body, top, lever); g.traverse(o => { o.castShadow = true; });
   return g;
 }
+function makeStunMesh() {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.14, 12), new THREE.MeshStandardMaterial({ color: 0x8a9aa8, metalness: 0.6, roughness: 0.4 }));
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.047, 0.047, 0.03, 12), new THREE.MeshBasicMaterial({ color: 0x33bbff }));
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.025, 0.04, 8), new THREE.MeshStandardMaterial({ color: 0x555555, metalness: 0.8 }));
+  top.position.y = 0.09;
+  g.add(body, band, top); g.traverse(o => { o.castShadow = true; });
+  return g;
+}
+function makeMolotovMesh() {
+  const g = new THREE.Group();
+  const glass = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.055, 0.16, 12), new THREE.MeshStandardMaterial({ color: 0x6b3d12, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.85 }));
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.045, 0.08, 10), glass.material); neck.position.y = 0.12;
+  const rag = new THREE.Mesh(new THREE.ConeGeometry(0.025, 0.07, 6), new THREE.MeshStandardMaterial({ color: 0xd8cfb0, roughness: 1 })); rag.position.y = 0.19; rag.rotation.z = 0.4;
+  const flame = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffa020 })); flame.position.set(0.02, 0.23, 0); flame.scale.y = 1.6;
+  g.add(glass, neck, rag, flame); g.traverse(o => { o.castShadow = true; });
+  return g;
+}
+// throwable types, in unlock order
+const NADES = {
+  stun:    { label: 'STUN GRENADE', short: 'STUN', key: '3', wave: 3, max: 4, color: 0x55ccff, cls: 'b', mesh: makeStunMesh, fuse: 1.6 },
+  frag:    { label: 'FRAG GRENADE', short: 'FRAG', key: '4', wave: 5, max: 6, color: 0xffb020, cls: 'o', mesh: makeGrenadeMesh, fuse: 2.2 },
+  molotov: { label: 'MOLOTOV', short: 'MOLOTOV', key: '5', wave: 8, max: 4, color: 0xff5a10, cls: 'f', mesh: makeMolotovMesh, fuse: 99 },
+};
+const NADE_ORDER = ['stun', 'frag', 'molotov'];
+function unlockedNades() { return NADE_ORDER.filter(t => game.wave >= NADES[t].wave); }
+function selectNade(t) {
+  if (!t) { // cycle through the ones you have
+    const have = NADE_ORDER.filter(k => player.nades[k] > 0); if (!have.length) return;
+    t = have[(have.indexOf(player.nadeSel) + 1) % have.length];
+  }
+  if (player.nades[t] <= 0) { toast(`No ${NADES[t].label}S`, NADES[t].cls); return; }
+  player.nadeSel = t; sfx.switch();
+}
 function throwGrenade() {
-  if (player.grenades <= 0 || wstate.nadeCd > 0 || !player.alive) { if (player.grenades <= 0 && wstate.nadeCd <= 0) { sfx.empty(); wstate.nadeCd = 0.3; } return; }
-  player.grenades--; wstate.nadeCd = 0.9; wstate.throwT = 0.45; sfx.pin();
-  const m = makeGrenadeMesh(); scene.add(m);
+  let type = player.nadeSel;
+  if (player.nades[type] <= 0) type = NADE_ORDER.find(k => player.nades[k] > 0);
+  if (!type || wstate.nadeCd > 0 || !player.alive) { if (!type && wstate.nadeCd <= 0) { sfx.empty(); wstate.nadeCd = 0.3; } return; }
+  player.nadeSel = type; player.nades[type]--; wstate.nadeCd = 0.9; wstate.throwT = 0.45;
+  if (type === 'molotov') sfx.ignite(0.3); else sfx.pin();
+  const m = NADES[type].mesh(); scene.add(m);
   const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
   m.position.copy(camera.position).addScaledVector(dir, 0.5).add(new THREE.Vector3(0, -0.15, 0));
   const vel = dir.multiplyScalar(14.5).add(new THREE.Vector3(player.vel.x, 3.5, player.vel.z));
-  grenades.push({ m, vel, fuse: 2.2, spin: new THREE.Vector3(rr(-9, 9), rr(-9, 9), rr(-9, 9)) });
+  grenades.push({ m, vel, type, fuse: NADES[type].fuse, spin: new THREE.Vector3(rr(-9, 9), rr(-9, 9), rr(-9, 9)) });
 }
 function explode(pos) {
   const R = 7.5, MAXD = 320;
@@ -765,7 +829,7 @@ function explode(pos) {
   ball.position.copy(pos); scene.add(ball);
   const smoke = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshStandardMaterial({ color: 0x333028, transparent: true, opacity: 0.6, depthWrite: false, roughness: 1 }));
   smoke.position.copy(pos); scene.add(smoke);
-  boomLight.position.copy(pos).y += 1; boomLight.intensity = 80;
+  boomLight.color.setHex(0xff8830); boomLight.position.copy(pos).y += 1; boomLight.intensity = 80;
   explosions.push({ ball, smoke, t: 0 });
   burst(pos, 'spark', 30, 9, 0.04); burst(pos, 'dust', 25, 6, 0.08);
   // scorch mark
@@ -789,12 +853,90 @@ function explode(pos) {
   const pd = pos.distanceTo(_v.set(player.pos.x, player.pos.y + 1, player.pos.z));
   if (pd < R * 0.8 && game.running) { const n = Math.round(45 * (1 - pd / (R * 0.8))); if (n > 0) damagePlayer(n, pos, true); }
 }
+function stunBlast(pos) {
+  const R = 10;
+  sfx.stun();
+  boomLight.color.setHex(0xddf4ff); boomLight.position.copy(pos).y += 1; boomLight.intensity = 140;
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), new THREE.MeshBasicMaterial({ color: 0xe8f8ff, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false }));
+  ball.position.copy(pos); scene.add(ball);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.8, 1, 48), new THREE.MeshBasicMaterial({ color: 0x66ccff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+  ring.rotation.x = -Math.PI / 2; ring.position.set(pos.x, heightAt(pos.x, pos.z) + 0.1, pos.z); scene.add(ring);
+  explosions.push({ ball, ring, t: 0, stun: true });
+  burst(pos, 'zap', 40, 10, 0.03);
+  for (const s of spiders) {
+    if (s.dead) continue;
+    const d = s.root.position.distanceTo(pos);
+    if (d > R + s.size * 0.4) continue;
+    s.stunT = s.boss ? 3 : 5; s.hp -= 12; s.flash = 0.15;
+    if (s.state === 'air' || s.state === 'crouch') { s.airHit = true; s.vel.x *= 0.2; s.vel.z *= 0.2; s.vel.y = Math.min(s.vel.y, 0); s.mesh.scale.setScalar(s.size); }
+    s.state = s.airborne ? 'air' : 'walk';
+    if (s.hp <= 0) killSpider(s);
+  }
+  // flashbang: blinds you if you're close and looking at it
+  const toB = _v.subVectors(pos, camera.position), dist = toB.length();
+  const facing = toB.normalize().dot(new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion));
+  const blind = clamp((1 - dist / 22) * (0.35 + 0.65 * Math.max(0, facing)), 0, 1);
+  if (blind > 0.05) { ui.flash.style.transition = 'none'; ui.flash.style.opacity = blind; requestAnimationFrame(() => { ui.flash.style.transition = `opacity ${1 + blind * 2.5}s ease-out`; ui.flash.style.opacity = 0; }); }
+}
+function ignite(pos) {
+  const gy = heightAt(pos.x, pos.z), R = 3.6;
+  sfx.ignite(1); sfx.glass();
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(R, 32), new THREE.MeshBasicMaterial({ color: 0xff6a10, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+  disc.rotation.x = -Math.PI / 2; disc.position.set(pos.x, gy + 0.06, pos.z); scene.add(disc);
+  const flames = [];
+  for (let k = 0; k < 26; k++) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: fireTex, color: 0xffffff, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+    const a = Math.random() * 6.28, r = Math.sqrt(Math.random()) * R * 0.9;
+    sp.userData = { x: pos.x + Math.cos(a) * r, z: pos.z + Math.sin(a) * r, ph: Math.random() * 6, s: rr(0.8, 1.6) };
+    sp.userData.y = heightAt(sp.userData.x, sp.userData.z);
+    scene.add(sp); flames.push(sp);
+  }
+  const sm = new THREE.Mesh(new THREE.CircleGeometry(R * 1.05, 20), new THREE.MeshBasicMaterial({ color: 0x0a0806, transparent: true, opacity: 0.75, depthWrite: false }));
+  sm.rotation.x = -Math.PI / 2; sm.position.set(pos.x, gy + 0.04, pos.z); scene.add(sm); splats.push({ m: sm, life: 30 });
+  burst(new THREE.Vector3(pos.x, gy + 0.3, pos.z), 'spark', 25, 6, 0.04);
+  fires.push({ x: pos.x, z: pos.z, y: gy, R, t: 0, life: 8, disc, flames });
+}
+function updateFires(dt, time) {
+  let brightest = null;
+  for (let i = fires.length - 1; i >= 0; i--) {
+    const f = fires[i]; f.t += dt;
+    const fade = f.t < 0.3 ? f.t / 0.3 : clamp((f.life - f.t) / 1.5, 0, 1);
+    f.disc.material.opacity = 0.45 * fade + Math.sin(time * 20 + i) * 0.05;
+    for (const sp of f.flames) {
+      const u = sp.userData, k = ((time * 1.6 + u.ph) % 1);
+      sp.position.set(u.x + Math.sin(time * 3 + u.ph) * 0.1, u.y + 0.3 + k * 1.6 * u.s, u.z);
+      const sc = u.s * (1 - k * 0.6) * fade; sp.scale.set(sc * 0.9, sc * 1.3, 1);
+      sp.material.opacity = (1 - k) * fade;
+    }
+    // burn spiders standing in it
+    for (const s of spiders) {
+      if (s.dead || s.state === 'air') continue;
+      const d = Math.hypot(s.root.position.x - f.x, s.root.position.z - f.z);
+      if (d < f.R + s.size * 0.3) { s.hp -= (s.boss ? 70 : 45) * dt * fade; s.burnT = 3; if (s.hp <= 0) killSpider(s); }
+    }
+    // and you, if you stand in it
+    if (game.running && player.alive && player.pos.y - f.y < 1 && Math.hypot(player.pos.x - f.x, player.pos.z - f.z) < f.R * 0.95) burnPlayer(16 * dt * fade);
+    if (!brightest || fade > brightest.f) brightest = { fire: f, f: fade };
+    if (f.t > f.life) { scene.remove(f.disc); f.disc.geometry.dispose(); for (const sp of f.flames) { scene.remove(sp); sp.material.dispose(); } fires.splice(i, 1); }
+  }
+  if (brightest) { fireLight.position.set(brightest.fire.x, brightest.fire.y + 1.2, brightest.fire.z); fireLight.intensity = (18 + Math.sin(time * 23) * 4 + Math.sin(time * 37) * 3) * brightest.f; }
+  else fireLight.intensity = 0;
+}
+let burnSndT = 0;
+function burnPlayer(n) {
+  if (!player.alive) return;
+  player.hp -= n; player.hurtT = Math.max(player.hurtT, 0.5);
+  if ((burnSndT -= n) <= 0) { burnSndT = 8; sfx.hurt(); }
+  if (player.hp <= 0) { player.hp = 0; die(); }
+}
+
 function updateGrenades(dt) {
   for (let i = grenades.length - 1; i >= 0; i--) {
     const g = grenades[i], p = g.m.position;
     g.vel.y -= GRAVITY * dt; p.addScaledVector(g.vel, dt);
     g.m.rotation.x += g.spin.x * dt; g.m.rotation.y += g.spin.y * dt; g.m.rotation.z += g.spin.z * dt;
     const gy = heightAt(p.x, p.z) + 0.08;
+    let impact = p.y < gy;
     if (p.y < gy) {
       p.y = gy;
       if (Math.abs(g.vel.y) > 2) sfx.bounce();
@@ -806,6 +948,7 @@ function updateGrenades(dt) {
         const d = Math.sqrt(d2), nx = ex / d, nz = ez / d, vn = g.vel.x * nx + g.vel.z * nz;
         p.x = c.x + nx * c.r; p.z = c.z + nz * c.r;
         if (vn < 0) { g.vel.x -= 1.6 * vn * nx; g.vel.z -= 1.6 * vn * nz; sfx.bounce(); }
+        impact = true;
       }
     }
     // bounce off spider bodies
@@ -817,10 +960,16 @@ function updateGrenades(dt) {
         const n = _v2.subVectors(p, c).divideScalar(d), vn = g.vel.dot(n);
         p.copy(c).addScaledVector(n, rad);
         if (vn < 0) { g.vel.addScaledVector(n, -1.5 * vn); g.vel.multiplyScalar(0.5); sfx.bounce(); }
+        impact = true;
       }
     }
+    if (g.type === 'molotov') {
+      if (impact) { ignite(p.clone()); scene.remove(g.m); grenades.splice(i, 1); }
+      else if (Math.random() < dt * 30) burst(_v.copy(p).y += 0.2, 'spark', 1, 0.5, 0.02); // burning rag trail
+      continue;
+    }
     g.fuse -= dt;
-    if (g.fuse <= 0) { explode(p.clone()); scene.remove(g.m); grenades.splice(i, 1); }
+    if (g.fuse <= 0) { (g.type === 'stun' ? stunBlast : explode)(p.clone()); scene.remove(g.m); grenades.splice(i, 1); }
   }
   boomLight.intensity = Math.max(0, boomLight.intensity - dt * 200);
   const B = game.boss;
@@ -829,6 +978,12 @@ function updateGrenades(dt) {
     const e = explosions[i]; e.t += dt;
     const k = e.t / 0.35;
     e.ball.scale.setScalar(0.5 + 4.5 * Math.min(1, k)); e.ball.material.opacity = Math.max(0, 0.95 * (1 - k));
+    if (e.stun) {
+      e.ball.scale.setScalar(0.5 + 3 * Math.min(1, e.t / 0.15)); e.ball.material.opacity = Math.max(0, 1 - e.t / 0.3);
+      e.ring.scale.setScalar(1 + 10 * Math.min(1, e.t / 0.5)); e.ring.material.opacity = Math.max(0, 0.9 * (1 - e.t / 0.6));
+      if (e.t > 0.7) { scene.remove(e.ball, e.ring); e.ball.geometry.dispose(); e.ring.geometry.dispose(); explosions.splice(i, 1); }
+      continue;
+    }
     e.smoke.scale.setScalar(1 + 4 * Math.min(1, e.t / 1.5)); e.smoke.position.y += dt * 1.2; e.smoke.material.opacity = Math.max(0, 0.6 * (1 - e.t / 2.2));
     if (e.t > 2.2) { scene.remove(e.ball, e.smoke); e.ball.geometry.dispose(); e.smoke.geometry.dispose(); explosions.splice(i, 1); }
   }
@@ -850,7 +1005,8 @@ function startWave() {
   game.wave++;
   const count = 6 + game.wave * 4;
   game.toSpawn = count; game.remaining = count + 1; game.spawnT = 0; game.betweenT = 0; game.waveSize = count; game.bossSpawned = false;
-  banner(`WAVE ${game.wave}<small>${count} spiders + 1 boss incoming${game.wave === 5 ? ' — spiders now drop GRENADES' : ''}</small>`);
+  const unlock = NADE_ORDER.find(t => NADES[t].wave === game.wave);
+  banner(`WAVE ${game.wave}<small>${count} spiders + 1 boss incoming${unlock ? ` — spiders now drop ${NADES[unlock].label}S` : ''}</small>`, unlock ? 4 : 2.5);
   sfx.wave();
 }
 
@@ -858,7 +1014,10 @@ function resetGame() {
   for (const s of spiders) scene.remove(s.root);
   spiders.length = 0;
   for (const g of grenades) scene.remove(g.m);
-  grenades.length = 0; game.boss = null; ui.bossbar.classList.add('hidden'); player.grenades = 0;
+  grenades.length = 0; game.boss = null; ui.bossbar.classList.add('hidden');
+  player.nades = { stun: 0, frag: 0, molotov: 0 }; player.nadeSel = 'frag';
+  for (const f of fires) { scene.remove(f.disc); for (const sp of f.flames) scene.remove(sp); }
+  fires.length = 0; fireLight.intensity = 0;
   Object.assign(player, { hp: 100, alive: true, kills: 0, vy: 0, yaw: 0, pitch: 0 });
   player.pos.set(0, heightAt(0, 0), 0); player.knock.set(0, 0, 0);
   WEAPONS[0].mag = 30; WEAPONS[0].reserve = 120; WEAPONS[1].mag = 7; WEAPONS[1].reserve = 35;
@@ -1006,6 +1165,10 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Digit2') selectWeapon(1);
   if (e.code === 'KeyQ') selectWeapon(cur === 0 ? 1 : 0);
   if (e.code === 'KeyG') throwGrenade();
+  if (e.code === 'KeyT') selectNade();
+  if (e.code === 'Digit3') selectNade('stun');
+  if (e.code === 'Digit4') selectNade('frag');
+  if (e.code === 'Digit5') selectNade('molotov');
   if (e.code === 'Space') e.preventDefault();
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; });
@@ -1120,14 +1283,14 @@ let lastHud = '';
 function updateHud() {
   const w = WEAPONS[cur];
   if (game.boss) ui.bossfill.style.width = `${Math.max(0, game.boss.hp / game.boss.maxHp * 100)}%`;
-  const s = `${game.wave}|${game.remaining}|${player.kills}|${Math.ceil(player.hp)}|${w.mag}|${w.reserve}|${cur}|${wstate.reloading > 0}|${player.grenades}`;
+  const s = `${game.wave}|${game.remaining}|${player.kills}|${Math.ceil(player.hp)}|${w.mag}|${w.reserve}|${cur}|${wstate.reloading > 0}|${JSON.stringify(player.nades)}|${player.nadeSel}`;
   if (s !== lastHud) {
     lastHud = s;
     ui.wave.textContent = game.wave; ui.left.textContent = Math.max(0, game.remaining); ui.kills.textContent = player.kills;
     ui.hpfill.style.width = `${player.hp}%`; ui.hptext.textContent = Math.ceil(player.hp);
     ui.mag.textContent = w.mag; ui.mag.classList.toggle('low', w.mag <= Math.ceil(w.magSize * 0.25));
     ui.reserve.textContent = `/ ${w.reserve}`; ui.wname.textContent = w.name;
-    ui.nades.textContent = player.grenades; ui.nades.parentElement.classList.toggle('none', player.grenades === 0);
+    ui.nadeRow.innerHTML = NADE_ORDER.map(t => `<span class="nd ${NADES[t].cls}${player.nadeSel === t ? ' sel' : ''}${player.nades[t] ? '' : ' none'}">${NADES[t].key} ${NADES[t].short} <b>${player.nades[t]}</b></span>`).join('');
     ui.reloadhint.textContent = wstate.reloading > 0 ? 'RELOADING…' : (w.mag === 0 && w.reserve === 0 ? 'NO AMMO — SWITCH / FIND CRATES' : (w.mag <= w.magSize * 0.25 ? 'PRESS R TO RELOAD' : ''));
   }
   ui.vignette.style.opacity = Math.max(player.hurtT * 0.9, player.hp < 30 ? 0.35 + Math.sin(performance.now() / 250) * 0.1 : 0);
@@ -1146,7 +1309,7 @@ function tick(dt) {
   if (active || !player.alive) {
     game.time += dt;
     const hs = updatePlayer(dt);
-    if (active) { updateSpiders(dt, game.time); updateWaves(dt); updatePickups(dt); updateGrenades(dt); }
+    if (active) { updateSpiders(dt, game.time); updateWaves(dt); updatePickups(dt); updateGrenades(dt); updateFires(dt, game.time); }
     else updateSpiders(dt * 0.3, game.time);
     updateWeapon(dt, hs, game.time);
     updateHud();
@@ -1194,4 +1357,4 @@ function tick(dt) {
 })();
 
 // expose for debugging
-window.__game = { game, player, spiders, WEAPONS, camera, renderer, spawnSpider, makeSpider, heightAt, tick, keys, wstate, pickups, spawnBoss, throwGrenade, grenades, dropPickup };
+window.__game = { game, player, spiders, WEAPONS, camera, renderer, spawnSpider, makeSpider, heightAt, tick, keys, wstate, pickups, spawnBoss, throwGrenade, grenades, dropPickup, fires, selectNade };
