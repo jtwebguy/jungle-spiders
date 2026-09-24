@@ -20,6 +20,7 @@ const ui = {
   wname: $('wname'), reloadhint: $('reloadhint'), slot1: $('slot1'), slot2: $('slot2'),
   toasts: $('toasts'), vignette: $('vignette'), hit: $('hitmarker'),
   cross: $('crosshair'), overstats: $('overstats'),
+  bossbar: $('bossbar'), bossname: $('bossname'), bossfill: $('bossfill'), nades: $('nades'),
 };
 
 // ---------- Renderer / scenes ----------
@@ -69,6 +70,9 @@ const SUN_OFFSET = new THREE.Vector3(40, 70, 25);
 
 const flashLight = new THREE.PointLight(0xffb060, 0, 14, 2);
 scene.add(flashLight);
+// persistent lights (adding/removing lights at runtime forces shader recompiles = stutter)
+const boomLight = new THREE.PointLight(0xff8830, 0, 30, 2); scene.add(boomLight);
+const bossLight = new THREE.PointLight(0xff2200, 0, 10, 2); scene.add(bossLight);
 
 // ---------- Utils ----------
 let seed = 1337;
@@ -286,6 +290,10 @@ const sfx = {
   pickup() { tone(660, 0.1, { vol: 0.2 }); tone(990, 0.15, { vol: 0.2, when: 0.08 }); },
   heal() { tone(520, 0.12, { vol: 0.2 }); tone(780, 0.12, { vol: 0.2, when: 0.1 }); tone(1040, 0.2, { vol: 0.2, when: 0.2 }); },
   switch() { noise(0.08, { type: 'bandpass', freq: 1500, vol: 0.25 }); },
+  roar() { tone(70, 1.1, { vol: 0.45, type: 'sawtooth', to: 40, attack: 0.1 }); tone(95, 1.0, { vol: 0.3, type: 'square', to: 55, attack: 0.1 }); noise(1.0, { type: 'bandpass', freq: 500, q: 2, vol: 0.4, attack: 0.1, decay: 0.9 }); },
+  boom(v = 1) { noise(1.4, { freq: 300, vol: 0.9 * v, decay: 1.3 }); noise(0.4, { freq: 3000, vol: 0.5 * v, decay: 0.3 }); tone(60, 0.9, { to: 25, vol: 0.7 * v, type: 'sine' }); },
+  pin() { tone(2400, 0.04, { vol: 0.12, type: 'square' }); noise(0.05, { type: 'highpass', freq: 5000, vol: 0.2, when: 0.05 }); },
+  bounce() { tone(900, 0.04, { vol: 0.08, type: 'triangle', to: 600 }); },
   wave() { tone(110, 0.9, { vol: 0.3, type: 'sawtooth', to: 80 }); tone(165, 0.9, { vol: 0.2, type: 'sawtooth', to: 120 }); },
 };
 function startAmbience() {
@@ -369,7 +377,7 @@ function splat(x, z, s) {
 const keys = {};
 const player = {
   pos: new THREE.Vector3(0, 0, 0), vy: 0, onGround: true, yaw: 0, pitch: 0,
-  hp: 100, alive: true, kills: 0, bob: 0, hurtT: 0, knock: new THREE.Vector3(),
+  hp: 100, alive: true, kills: 0, grenades: 0, bob: 0, hurtT: 0, knock: new THREE.Vector3(),
 };
 
 const WEAPONS = [
@@ -387,7 +395,7 @@ const WEAPONS = [
   },
 ];
 let cur = 0;
-const wstate = { cooldown: 0, reloading: 0, switching: 0, recoil: 0, kick: 0, mouseDown: false, triggerReleased: true, spreadHeat: 0 };
+const wstate = { nadeCd: 0, throwT: 0, cooldown: 0, reloading: 0, switching: 0, recoil: 0, kick: 0, mouseDown: false, triggerReleased: true, spreadHeat: 0 };
 
 const vmRoot = new THREE.Group(); vmScene.add(vmRoot);
 const flashTex = canvasTex(64, 64, (x) => {
@@ -441,7 +449,7 @@ function makeSpider(size) {
   }
   mesh.scale.setScalar(size);
   pivot.add(mesh); root.add(pivot); scene.add(root);
-  const t = (size - 0.15) / 0.85; // 0 = mouse, 1 = dog
+  const t = clamp((size - 0.15) / 0.85, 0, 1); // 0 = mouse, 1 = dog (bosses clamp to 1)
   return {
     root, pivot, mesh, mat, size, t,
     hp: 10 + 230 * size * size, maxHp: 10 + 230 * size * size,
@@ -449,7 +457,7 @@ function makeSpider(size) {
     dmg: Math.round(4 + 18 * t),
     jumpRange: lerp(3.5, 8, t), jumpCd: rr(0.5, 2),
     state: 'walk', stateT: 0, vel: new THREE.Vector3(), yaw: 0, phase: Math.random() * 10,
-    hitCd: 0, flash: 0, dead: false, deadT: 0, airHit: false,
+    hitCd: 0, flash: 0, dead: false, deadT: 0, airHit: false, boss: false, broodT: 6,
   };
 }
 
@@ -474,14 +482,48 @@ function spawnSpider(wave) {
   spiders.push(s);
 }
 
+const BOSS_NAMES = ['The Broodmother', 'Old Hairy', 'Silk Queen', 'The Widow', 'Canopy Terror', 'Jungle Titan', 'Eight-Legged Nightmare', 'The Devourer', 'Mother of Webs', 'Ancient Weaver'];
+function bossSize(wave) { return 1.5 + (Math.min(wave, 10) - 1) * 0.55 + Math.max(0, wave - 10) * 0.3; }   // wave 1: 1.5 m, wave 5: 3.7 m, wave 10: 6.45 m, then +0.3 m per wave
+function spawnBoss(wave) {
+  let x, z, tries = 0;
+  do { const a = Math.random() * Math.PI * 2, d = rr(38, 50); x = player.pos.x + Math.cos(a) * d; z = player.pos.z + Math.sin(a) * d; }
+  while (Math.hypot(x, z) > WORLD - 12 && tries++ < 30);
+  if (Math.hypot(x, z) > WORLD - 12) { const k = (WORLD - 14) / Math.hypot(x, z); x *= k; z *= k; }
+  const size = bossSize(wave), s = makeSpider(size);
+  s.boss = true; s.t = 1;
+  s.name = BOSS_NAMES[(wave - 1) % BOSS_NAMES.length] + (wave > BOSS_NAMES.length ? ' ' + 'II III IV V'.split(' ')[Math.min(3, Math.floor((wave - 1) / BOSS_NAMES.length) - 1)] : '');
+  s.hp = s.maxHp = 350 + 220 * wave;
+  s.speed = 3.2 + Math.min(2.2, wave * 0.18);
+  s.dmg = 22 + 3 * wave;
+  s.jumpRange = 10 + size * 2; s.jumpCd = 3;
+  s.mat.color.setHex([0x1b0e08, 0x2a0a0a, 0x101010, 0x3a1e0c][wave % 4]);
+  s.mat.roughness = 0.5; s.mat.metalness = 0.25;
+  s.mesh.traverse(o => { if (o !== s.mesh && o.material) { o.material = new THREE.MeshBasicMaterial({ color: 0xff1a00 }); o.scale.multiplyScalar(1.3); } });
+  bossLight.distance = 4 + size * 2;
+  s.root.position.set(x, heightAt(x, z), z);
+  spiders.push(s); game.boss = s;
+  ui.bossbar.classList.remove('hidden'); ui.bossname.textContent = s.name;
+  banner(`${s.name.toUpperCase()}<small>boss approaching — ${size.toFixed(1)} m leg span</small>`, 3.5);
+  sfx.roar();
+}
+
 function killSpider(s) {
   s.dead = true; s.deadT = 0; s.state = 'dead';
   player.kills++; game.remaining--;
   burst(s.root.position.clone().add(new THREE.Vector3(0, 0.15 * s.size, 0)), 'blood', 8 + Math.round(20 * s.size), 3 + 3 * s.size, 0.03 + 0.05 * s.size);
   splat(s.root.position.x, s.root.position.z, 0.5 + s.size * 1.6);
   sfx.squish();
-  // chance to drop a small pickup
-  if (Math.random() < 0.12 + 0.2 * s.t) dropPickup(s.root.position.x, s.root.position.z, Math.random() < 0.6 ? 'ammo' : 'health', true);
+  const px = s.root.position.x, pz = s.root.position.z;
+  if (s.boss) {
+    game.boss = null; ui.bossbar.classList.add('hidden');
+    banner(`${s.name.toUpperCase()} SLAIN`, 2.5); shake(0.6);
+    dropPickup(px + 1.5, pz, 'health'); dropPickup(px - 1.5, pz, 'ammo');
+    if (game.wave >= 5) { dropPickup(px, pz + 1.5, 'grenade'); dropPickup(px, pz - 1.5, 'grenade'); }
+    return;
+  }
+  // chance to drop a small pickup — grenades start dropping from wave 5
+  if (game.wave >= 5 && Math.random() < 0.14 + 0.1 * s.t) dropPickup(px, pz, 'grenade', true);
+  else if (Math.random() < 0.12 + 0.2 * s.t) dropPickup(px, pz, Math.random() < 0.6 ? 'ammo' : 'health', true);
 }
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
@@ -511,13 +553,24 @@ function updateSpiders(dt, time) {
       const weave = Math.sin(time * 2.3 + s.phase) * (dist > 6 ? 0.7 : 0.2);
       const yaw = targetYaw + weave;
       let dy = yaw - s.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); s.yaw += dy * Math.min(1, dt * 8);
-      const sp = s.speed * burstF * (dist < 1.2 ? 0 : 1);
+      const sp = s.speed * (s.boss ? 0.6 + 0.4 * burstF : burstF) * (dist < 0.9 + s.size * 0.35 ? 0 : 1);
       p.x += Math.sin(s.yaw) * sp * dt; p.z += Math.cos(s.yaw) * sp * dt;
       p.y = heightAt(p.x, p.z);
       s.pivot.position.y = Math.abs(Math.sin(time * 18 + s.phase)) * 0.03 * s.size;
       s.pivot.rotation.z = Math.sin(time * 22 + s.phase) * 0.06;
       s.pivot.rotation.x = 0;
       if (dist < s.jumpRange && dist > 1.0 && s.jumpCd <= 0 && player.alive) { s.state = 'crouch'; s.stateT = 0; }
+      // bosses call in their brood
+      if (s.boss && game.wave >= 2 && (s.broodT -= dt) <= 0 && game.running) {
+        s.broodT = Math.max(5, 10 - game.wave * 0.4);
+        const n = Math.min(4, 1 + Math.floor(game.wave / 3));
+        for (let k = 0; k < n; k++) {
+          const b = makeSpider(rr(0.15, 0.35)), a = Math.random() * 6.28;
+          b.root.position.set(p.x + Math.cos(a) * s.size * 0.4, p.y, p.z + Math.sin(a) * s.size * 0.4); b.jumpCd = 1.5;
+          spiders.push(b); game.remaining++;
+        }
+        sfx.hiss(0.35);
+      }
       // bite when close
       if (dist < 0.6 + s.size * 0.6 && s.hitCd <= 0 && player.alive) { damagePlayer(Math.ceil(s.dmg * 0.6), p); s.hitCd = 1.0; }
     } else if (s.state === 'crouch') {
@@ -525,15 +578,15 @@ function updateSpiders(dt, time) {
       const k = Math.min(1, s.stateT / 0.35);
       s.mesh.scale.set(s.size * (1 + 0.12 * k), s.size * (1 - 0.35 * k), s.size * (1 + 0.05 * k));
       s.pivot.rotation.x = -0.15 * k;
-      if (s.stateT > lerp(0.25, 0.45, s.t)) {
+      if (s.stateT > (s.boss ? 0.8 : lerp(0.25, 0.45, s.t))) {
         // leap: aim at the player's chest/face with a ballistic arc (and lead the target a bit)
-        const T = clamp(0.35 + dist * 0.07, 0.4, 0.9);
+        const T = s.boss ? clamp(0.6 + dist * 0.06, 0.8, 1.4) : clamp(0.35 + dist * 0.07, 0.4, 0.9);
         const tx = pp.x + (player.vel?.x || 0) * T * 0.5, tz = pp.z + (player.vel?.z || 0) * T * 0.5;
-        const ty = pp.y + EYE - 0.35 + rr(-0.2, 0.2);
+        const ty = s.boss ? pp.y : pp.y + EYE - 0.35 + rr(-0.2, 0.2);
         s.vel.set((tx - p.x) / T, (ty - p.y + 0.5 * GRAVITY * T * T) / T, (tz - p.z) / T);
         s.state = 'air'; s.stateT = 0; s.airHit = false; s.airborne = true;
         s.mesh.scale.setScalar(s.size);
-        sfx.hiss(0.1 + 0.25 * s.t);
+        if (s.boss) sfx.roar(); else sfx.hiss(0.1 + 0.25 * s.t);
       }
     } else if (s.state === 'air') {
       s.vel.y -= GRAVITY * dt; p.addScaledVector(s.vel, dt);
@@ -549,11 +602,21 @@ function updateSpiders(dt, time) {
         }
       }
       const gy = heightAt(p.x, p.z);
-      if (p.y <= gy && s.vel.y < 0) { p.y = gy; s.state = 'walk'; s.stateT = 0; s.airborne = false; s.jumpCd = rr(1.2, 2.8) + s.t; s.pivot.rotation.x = 0; }
+      if (p.y <= gy && s.vel.y < 0) {
+        p.y = gy; s.state = 'walk'; s.stateT = 0; s.airborne = false; s.jumpCd = rr(1.2, 2.8) + s.t; s.pivot.rotation.x = 0;
+        if (s.boss) {
+          // ground slam shockwave
+          s.jumpCd = rr(2.5, 4);
+          const slamR = 2 + s.size * 1.1, dp = Math.hypot(pp.x - p.x, pp.z - p.z);
+          shake(clamp(1.2 - dp / 40, 0.2, 1)); sfx.boom(0.6);
+          for (let k = 0; k < 24; k++) { const a = k / 24 * 6.28; burst(_v.set(p.x + Math.cos(a) * slamR * 0.6, p.y + 0.1, p.z + Math.sin(a) * slamR * 0.6), 'dust', 1, 4, 0.08); }
+          if (dp < slamR && player.onGround && !s.airHit) damagePlayer(Math.round(s.dmg * 0.6 * (1 - dp / slamR) + 5), p, true);
+        }
+      }
     }
 
     // keep out of trees & away from each other
-    if (s.state !== 'air') {
+    if (s.state !== 'air' && !s.boss) { // bosses trample through the undergrowth
       for (const c of colliders) {
         const ex = p.x - c.x, ez = p.z - c.z, d2 = ex * ex + ez * ez, rr2 = c.r + 0.3 * s.size;
         if (d2 < rr2 * rr2 && d2 > 1e-6) { const d = Math.sqrt(d2); p.x = c.x + ex / d * rr2; p.z = c.z + ez / d * rr2; }
@@ -567,7 +630,7 @@ function updateSpiders(dt, time) {
     const A = spiders[a], B = spiders[b]; if (A.dead || B.dead) continue;
     const ex = A.root.position.x - B.root.position.x, ez = A.root.position.z - B.root.position.z;
     const min = (A.size + B.size) * 0.4, d2 = ex * ex + ez * ez;
-    if (d2 < min * min && d2 > 1e-6) { const d = Math.sqrt(d2), push = (min - d) * 0.5; A.root.position.x += ex / d * push; A.root.position.z += ez / d * push; B.root.position.x -= ex / d * push; B.root.position.z -= ez / d * push; }
+    if (d2 < min * min && d2 > 1e-6) { const d = Math.sqrt(d2), push = (min - d), wa = B.size / (A.size + B.size), wb = 1 - wa; A.root.position.x += ex / d * push * wa; A.root.position.z += ez / d * push * wa; B.root.position.x -= ex / d * push * wb; B.root.position.z -= ez / d * push * wb; }
   }
 }
 
@@ -597,12 +660,15 @@ function dropPickup(x, z, type, small = false) {
       new THREE.MeshStandardMaterial({ color: 0x5a6a34, roughness: 0.8 }), new THREE.MeshStandardMaterial({ color: 0x3a4620 }),
       new THREE.MeshStandardMaterial({ map: ammoTex }), new THREE.MeshStandardMaterial({ map: ammoTex }),
     ]);
+  } else if (type === 'grenade') {
+    item = new THREE.Group();
+    for (let k = 0; k < 2; k++) { const gm = makeGrenadeMesh(); gm.scale.setScalar(1.8); gm.position.x = (k - 0.5) * 0.28; item.add(gm); }
   } else {
     const mm = new THREE.MeshStandardMaterial({ map: medTex, roughness: 0.5 });
     item = new THREE.Mesh(medGeo, mm);
   }
   item.castShadow = true;
-  const color = type === 'ammo' ? 0xc8ff60 : 0xff5050;
+  const color = type === 'ammo' ? 0xc8ff60 : type === 'grenade' ? 0xffb020 : 0xff5050;
   const beam = new THREE.Mesh(beamGeo, beamMat(color));
   const ring = new THREE.Mesh(ringGeo, beamMat(color)); ring.material.opacity = 0.6; ring.position.y = 0.05;
   g.add(item, beam, ring);
@@ -645,6 +711,11 @@ function collect(p) {
     if (player.hp >= 100) return false;
     const add = p.small ? 20 : 35; player.hp = Math.min(100, player.hp + add); sfx.heal(); toast(`+${add} HEALTH`, 'r'); return true;
   }
+  if (p.type === 'grenade') {
+    if (player.grenades >= MAX_NADES) return false;
+    const add = Math.min(MAX_NADES - player.grenades, p.small ? 1 : 2); player.grenades += add;
+    sfx.pickup(); toast(`+${add} GRENADE${add > 1 ? 'S' : ''}  [G / right-click]`, 'o'); return true;
+  }
   const mult = p.small ? 0.5 : 1; let got = [];
   for (const w of WEAPONS) {
     if (w.reserve >= w.maxReserve) continue;
@@ -655,9 +726,118 @@ function collect(p) {
 }
 
 // ============================================================
+//  Camera shake
+// ============================================================
+let shakeAmt = 0;
+function shake(a) { shakeAmt = Math.min(1.5, shakeAmt + a); }
+
+// ============================================================
+//  Grenades
+// ============================================================
+const MAX_NADES = 6;
+const grenades = [], explosions = [];
+function makeGrenadeMesh() {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.07, 12, 10), new THREE.MeshStandardMaterial({ color: 0x3d4a26, roughness: 0.7 }));
+  body.scale.y = 1.2;
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.05, 8), new THREE.MeshStandardMaterial({ color: 0x777777, metalness: 0.8, roughness: 0.3 }));
+  top.position.y = 0.09;
+  const lever = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.1, 0.02), top.material); lever.position.set(0.04, 0.05, 0); lever.rotation.z = -0.3;
+  g.add(body, top, lever); g.traverse(o => { o.castShadow = true; });
+  return g;
+}
+function throwGrenade() {
+  if (player.grenades <= 0 || wstate.nadeCd > 0 || !player.alive) { if (player.grenades <= 0 && wstate.nadeCd <= 0) { sfx.empty(); wstate.nadeCd = 0.3; } return; }
+  player.grenades--; wstate.nadeCd = 0.9; wstate.throwT = 0.45; sfx.pin();
+  const m = makeGrenadeMesh(); scene.add(m);
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  m.position.copy(camera.position).addScaledVector(dir, 0.5).add(new THREE.Vector3(0, -0.15, 0));
+  const vel = dir.multiplyScalar(14.5).add(new THREE.Vector3(player.vel.x, 3.5, player.vel.z));
+  grenades.push({ m, vel, fuse: 2.2, spin: new THREE.Vector3(rr(-9, 9), rr(-9, 9), rr(-9, 9)) });
+}
+function explode(pos) {
+  const R = 7.5, MAXD = 320;
+  sfx.boom(1);
+  const dp = pos.distanceTo(camera.position);
+  shake(clamp(1.3 - dp / 30, 0.1, 1.3));
+  // fireball
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), new THREE.MeshBasicMaterial({ color: 0xffa040, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }));
+  ball.position.copy(pos); scene.add(ball);
+  const smoke = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshStandardMaterial({ color: 0x333028, transparent: true, opacity: 0.6, depthWrite: false, roughness: 1 }));
+  smoke.position.copy(pos); scene.add(smoke);
+  boomLight.position.copy(pos).y += 1; boomLight.intensity = 80;
+  explosions.push({ ball, smoke, t: 0 });
+  burst(pos, 'spark', 30, 9, 0.04); burst(pos, 'dust', 25, 6, 0.08);
+  // scorch mark
+  const sm = new THREE.Mesh(new THREE.CircleGeometry(1.8, 16), new THREE.MeshBasicMaterial({ color: 0x0a0806, transparent: true, opacity: 0.7, depthWrite: false }));
+  sm.rotation.x = -Math.PI / 2; sm.position.set(pos.x, heightAt(pos.x, pos.z) + 0.04, pos.z); scene.add(sm); splats.push({ m: sm, life: 30 });
+  // damage spiders
+  for (const s of spiders) {
+    if (s.dead) continue;
+    const c = _v.copy(s.root.position); c.y += 0.12 * s.size;
+    const d = Math.max(0, c.distanceTo(pos) - 0.36 * s.size);
+    if (d > R) continue;
+    const f = Math.pow(1 - d / R, 0.8);
+    s.hp -= MAXD * f; s.flash = 0.2;
+    const push = (10 * f) / (0.4 + s.size);
+    _v2.subVectors(c, pos).setY(0).normalize();
+    s.vel.set(_v2.x * push, 4 + 6 * f / (0.4 + s.size), _v2.z * push);
+    if (s.hp <= 0) { s.airborne = true; killSpider(s); }
+    else if (!s.boss) { s.state = 'air'; s.airHit = true; s.airborne = true; s.stateT = 0; }
+  }
+  // hurt the player too if too close
+  const pd = pos.distanceTo(_v.set(player.pos.x, player.pos.y + 1, player.pos.z));
+  if (pd < R * 0.8 && game.running) { const n = Math.round(45 * (1 - pd / (R * 0.8))); if (n > 0) damagePlayer(n, pos, true); }
+}
+function updateGrenades(dt) {
+  for (let i = grenades.length - 1; i >= 0; i--) {
+    const g = grenades[i], p = g.m.position;
+    g.vel.y -= GRAVITY * dt; p.addScaledVector(g.vel, dt);
+    g.m.rotation.x += g.spin.x * dt; g.m.rotation.y += g.spin.y * dt; g.m.rotation.z += g.spin.z * dt;
+    const gy = heightAt(p.x, p.z) + 0.08;
+    if (p.y < gy) {
+      p.y = gy;
+      if (Math.abs(g.vel.y) > 2) sfx.bounce();
+      g.vel.y = Math.abs(g.vel.y) * 0.35; g.vel.x *= 0.55; g.vel.z *= 0.55; g.spin.multiplyScalar(0.6);
+    }
+    for (const c of colliders) {
+      const ex = p.x - c.x, ez = p.z - c.z, d2 = ex * ex + ez * ez;
+      if (d2 < c.r * c.r && p.y < c.h && d2 > 1e-6) {
+        const d = Math.sqrt(d2), nx = ex / d, nz = ez / d, vn = g.vel.x * nx + g.vel.z * nz;
+        p.x = c.x + nx * c.r; p.z = c.z + nz * c.r;
+        if (vn < 0) { g.vel.x -= 1.6 * vn * nx; g.vel.z -= 1.6 * vn * nz; sfx.bounce(); }
+      }
+    }
+    // bounce off spider bodies
+    for (const s of spiders) {
+      if (s.dead) continue;
+      const c = _v.copy(s.root.position); c.y += 0.14 * s.size;
+      const rad = 0.3 * s.size + 0.07, d = p.distanceTo(c);
+      if (d < rad && d > 1e-6) {
+        const n = _v2.subVectors(p, c).divideScalar(d), vn = g.vel.dot(n);
+        p.copy(c).addScaledVector(n, rad);
+        if (vn < 0) { g.vel.addScaledVector(n, -1.5 * vn); g.vel.multiplyScalar(0.5); sfx.bounce(); }
+      }
+    }
+    g.fuse -= dt;
+    if (g.fuse <= 0) { explode(p.clone()); scene.remove(g.m); grenades.splice(i, 1); }
+  }
+  boomLight.intensity = Math.max(0, boomLight.intensity - dt * 200);
+  const B = game.boss;
+  if (B && !B.dead) { bossLight.intensity = 4; bossLight.position.copy(B.root.position).y += B.size * 0.4; } else bossLight.intensity = 0;
+  for (let i = explosions.length - 1; i >= 0; i--) {
+    const e = explosions[i]; e.t += dt;
+    const k = e.t / 0.35;
+    e.ball.scale.setScalar(0.5 + 4.5 * Math.min(1, k)); e.ball.material.opacity = Math.max(0, 0.95 * (1 - k));
+    e.smoke.scale.setScalar(1 + 4 * Math.min(1, e.t / 1.5)); e.smoke.position.y += dt * 1.2; e.smoke.material.opacity = Math.max(0, 0.6 * (1 - e.t / 2.2));
+    if (e.t > 2.2) { scene.remove(e.ball, e.smoke); e.ball.geometry.dispose(); e.smoke.geometry.dispose(); explosions.splice(i, 1); }
+  }
+}
+
+// ============================================================
 //  Game flow
 // ============================================================
-const game = { running: false, paused: false, wave: 0, toSpawn: 0, remaining: 0, spawnT: 0, betweenT: 0, time: 0 };
+const game = { running: false, paused: false, wave: 0, toSpawn: 0, remaining: 0, spawnT: 0, betweenT: 0, time: 0, boss: null, bossSpawned: false, waveSize: 0 };
 
 function toast(text, cls = '') {
   const d = document.createElement('div'); d.className = 'toast ' + cls; d.textContent = text; ui.toasts.appendChild(d);
@@ -669,18 +849,20 @@ function banner(html, secs = 2.5) { ui.banner.innerHTML = html; ui.banner.classL
 function startWave() {
   game.wave++;
   const count = 6 + game.wave * 4;
-  game.toSpawn = count; game.remaining = count; game.spawnT = 0; game.betweenT = 0;
-  banner(`WAVE ${game.wave}<small>${count} spiders incoming</small>`);
+  game.toSpawn = count; game.remaining = count + 1; game.spawnT = 0; game.betweenT = 0; game.waveSize = count; game.bossSpawned = false;
+  banner(`WAVE ${game.wave}<small>${count} spiders + 1 boss incoming${game.wave === 5 ? ' — spiders now drop GRENADES' : ''}</small>`);
   sfx.wave();
 }
 
 function resetGame() {
   for (const s of spiders) scene.remove(s.root);
   spiders.length = 0;
+  for (const g of grenades) scene.remove(g.m);
+  grenades.length = 0; game.boss = null; ui.bossbar.classList.add('hidden'); player.grenades = 0;
   Object.assign(player, { hp: 100, alive: true, kills: 0, vy: 0, yaw: 0, pitch: 0 });
   player.pos.set(0, heightAt(0, 0), 0); player.knock.set(0, 0, 0);
   WEAPONS[0].mag = 30; WEAPONS[0].reserve = 120; WEAPONS[1].mag = 7; WEAPONS[1].reserve = 35;
-  Object.assign(wstate, { cooldown: 0, reloading: 0, switching: 0, recoil: 0, kick: 0 });
+  Object.assign(wstate, { cooldown: 0, reloading: 0, switching: 0, recoil: 0, kick: 0, nadeCd: 0, throwT: 0 });
   selectWeapon(0, true);
   seedPickups();
   game.wave = 0; game.betweenT = 2.5; game.toSpawn = 0; game.remaining = 0; game.running = true;
@@ -811,7 +993,8 @@ document.addEventListener('mousemove', (e) => {
   player.yaw -= e.movementX * 0.0022; player.pitch -= e.movementY * 0.0022;
   player.pitch = clamp(player.pitch, -1.5, 1.5);
 });
-document.addEventListener('mousedown', (e) => { if (e.button === 0 && document.pointerLockElement === canvas) wstate.mouseDown = true; });
+document.addEventListener('mousedown', (e) => { if (document.pointerLockElement !== canvas) return; if (e.button === 0) wstate.mouseDown = true; if (e.button === 2 && game.running && !game.paused) throwGrenade(); });
+document.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('mouseup', (e) => { if (e.button === 0) { wstate.mouseDown = false; wstate.triggerReleased = true; } });
 let lastWheel = 0;
 document.addEventListener('wheel', () => { const n = performance.now(); if (document.pointerLockElement === canvas && n - lastWheel > 250) { lastWheel = n; selectWeapon(cur === 0 ? 1 : 0); } });
@@ -822,6 +1005,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Digit1') selectWeapon(0);
   if (e.code === 'Digit2') selectWeapon(1);
   if (e.code === 'KeyQ') selectWeapon(cur === 0 ? 1 : 0);
+  if (e.code === 'KeyG') throwGrenade();
   if (e.code === 'Space') e.preventDefault();
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; });
@@ -852,6 +1036,11 @@ function updatePlayer(dt) {
     const ex = player.pos.x - c.x, ez = player.pos.z - c.z, rr2 = c.r + 0.4, d2 = ex * ex + ez * ez;
     if (d2 < rr2 * rr2 && d2 > 1e-6 && player.pos.y < c.h - 0.3) { const d = Math.sqrt(d2); player.pos.x = c.x + ex / d * rr2; player.pos.z = c.z + ez / d * rr2; }
   }
+  for (const s of spiders) {
+    if (s.dead || s.size < 1.2 || s.state === 'air') continue;
+    const ex = player.pos.x - s.root.position.x, ez = player.pos.z - s.root.position.z, rr2 = s.size * 0.32 + 0.3, d2 = ex * ex + ez * ez;
+    if (d2 < rr2 * rr2 && d2 > 1e-6) { const d = Math.sqrt(d2); player.pos.x = s.root.position.x + ex / d * rr2; player.pos.z = s.root.position.z + ez / d * rr2; }
+  }
   const lim = WORLD - 3, r = Math.hypot(player.pos.x, player.pos.z);
   if (r > lim) { player.pos.x *= lim / r; player.pos.z *= lim / r; }
 
@@ -866,6 +1055,11 @@ function updatePlayer(dt) {
   if (player.onGround) player.bob += dt * hs * 1.6;
   camera.position.set(player.pos.x, player.pos.y + (player.alive ? EYE : 0.35) + Math.sin(player.bob * 2) * 0.04 * Math.min(1, hs / 5), player.pos.z);
   camera.rotation.set(player.pitch + wstate.recoil, player.yaw, player.alive ? 0 : 0.6);
+  if (shakeAmt > 0.001) {
+    const a = shakeAmt * shakeAmt * 0.12;
+    camera.position.x += rr(-a, a); camera.position.y += rr(-a, a); camera.rotation.x += rr(-a, a) * 0.3; camera.rotation.z += rr(-a, a) * 0.3;
+    shakeAmt = Math.max(0, shakeAmt - dt * 1.8);
+  }
   wstate.recoil = lerp(wstate.recoil, 0, Math.min(1, dt * 9));
   player.hurtT = Math.max(0, player.hurtT - dt * 1.5);
   return hs;
@@ -875,6 +1069,7 @@ function updateWeapon(dt, hs, time) {
   const w = WEAPONS[cur];
   wstate.cooldown -= dt; wstate.spreadHeat = Math.max(0, wstate.spreadHeat - dt * 0.08);
   if (wstate.switching > 0) wstate.switching -= dt;
+  wstate.nadeCd -= dt; if (wstate.throwT > 0) wstate.throwT -= dt;
   if (wstate.reloading > 0) { wstate.reloading -= dt; if (wstate.reloading <= 0) finishReload(); }
   if (player.alive && !game.paused && wstate.mouseDown && wstate.cooldown <= 0 && wstate.reloading <= 0 && wstate.switching <= 0) {
     if (w.auto || wstate.triggerReleased) { fire(); wstate.triggerReleased = false; }
@@ -886,7 +1081,7 @@ function updateWeapon(dt, hs, time) {
   const bobx = Math.cos(player.bob) * 0.012 * Math.min(1, hs / 5), boby = Math.abs(Math.sin(player.bob)) * 0.014 * Math.min(1, hs / 5);
   const sprint = (keys.ShiftLeft || keys.ShiftRight) && hs > 6;
   const rl = wstate.reloading > 0 ? Math.sin(Math.PI * (1 - wstate.reloading / w.reloadTime)) : 0;
-  const sw = wstate.switching > 0 ? wstate.switching / 0.35 : 0;
+  const sw = Math.max(wstate.switching > 0 ? wstate.switching / 0.35 : 0, wstate.throwT > 0 ? Math.sin(Math.PI * wstate.throwT / 0.45) * 0.6 : 0);
   const g = w.group;
   g.position.set(w.pos.x + bobx, w.pos.y + boby - rl * 0.12 - sw * 0.3 - (sprint ? 0.04 : 0), w.pos.z + wstate.kick * w.kick);
   g.rotation.set(wstate.kick * 0.08 + rl * 0.5 - (sprint ? 0.2 : 0), (sprint ? 0.6 : 0.03), rl * 0.6 + (sprint ? 0.3 : 0));
@@ -912,7 +1107,9 @@ function updateWaves(dt) {
     game.spawnT -= dt;
     const alive = spiders.filter(s => !s.dead).length;
     if (game.spawnT <= 0 && alive < 28) { spawnSpider(game.wave); game.toSpawn--; game.spawnT = Math.max(0.25, 1.4 - game.wave * 0.1); }
-  } else if (game.remaining <= 0) {
+  }
+  if (!game.bossSpawned && game.wave > 0 && game.toSpawn <= game.waveSize / 2) { game.bossSpawned = true; spawnBoss(game.wave); }
+  if (game.toSpawn <= 0 && game.remaining <= 0) {
     if (game.betweenT <= 0) { game.betweenT = 6; if (game.wave > 0) { banner(`WAVE ${game.wave} CLEARED<small>next wave in 6s</small>`); } }
     game.betweenT -= dt;
     if (game.betweenT <= 0.001) startWave();
@@ -922,13 +1119,15 @@ function updateWaves(dt) {
 let lastHud = '';
 function updateHud() {
   const w = WEAPONS[cur];
-  const s = `${game.wave}|${game.remaining}|${player.kills}|${Math.ceil(player.hp)}|${w.mag}|${w.reserve}|${cur}|${wstate.reloading > 0}`;
+  if (game.boss) ui.bossfill.style.width = `${Math.max(0, game.boss.hp / game.boss.maxHp * 100)}%`;
+  const s = `${game.wave}|${game.remaining}|${player.kills}|${Math.ceil(player.hp)}|${w.mag}|${w.reserve}|${cur}|${wstate.reloading > 0}|${player.grenades}`;
   if (s !== lastHud) {
     lastHud = s;
     ui.wave.textContent = game.wave; ui.left.textContent = Math.max(0, game.remaining); ui.kills.textContent = player.kills;
     ui.hpfill.style.width = `${player.hp}%`; ui.hptext.textContent = Math.ceil(player.hp);
     ui.mag.textContent = w.mag; ui.mag.classList.toggle('low', w.mag <= Math.ceil(w.magSize * 0.25));
     ui.reserve.textContent = `/ ${w.reserve}`; ui.wname.textContent = w.name;
+    ui.nades.textContent = player.grenades; ui.nades.parentElement.classList.toggle('none', player.grenades === 0);
     ui.reloadhint.textContent = wstate.reloading > 0 ? 'RELOADING…' : (w.mag === 0 && w.reserve === 0 ? 'NO AMMO — SWITCH / FIND CRATES' : (w.mag <= w.magSize * 0.25 ? 'PRESS R TO RELOAD' : ''));
   }
   ui.vignette.style.opacity = Math.max(player.hurtT * 0.9, player.hp < 30 ? 0.35 + Math.sin(performance.now() / 250) * 0.1 : 0);
@@ -947,7 +1146,7 @@ function tick(dt) {
   if (active || !player.alive) {
     game.time += dt;
     const hs = updatePlayer(dt);
-    if (active) { updateSpiders(dt, game.time); updateWaves(dt); updatePickups(dt); }
+    if (active) { updateSpiders(dt, game.time); updateWaves(dt); updatePickups(dt); updateGrenades(dt); }
     else updateSpiders(dt * 0.3, game.time);
     updateWeapon(dt, hs, game.time);
     updateHud();
@@ -995,4 +1194,4 @@ function tick(dt) {
 })();
 
 // expose for debugging
-window.__game = { game, player, spiders, WEAPONS, camera, renderer, spawnSpider, makeSpider, heightAt, tick, keys, wstate, pickups };
+window.__game = { game, player, spiders, WEAPONS, camera, renderer, spawnSpider, makeSpider, heightAt, tick, keys, wstate, pickups, spawnBoss, throwGrenade, grenades, dropPickup };

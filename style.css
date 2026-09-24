@@ -66,3 +66,13 @@ kbd { background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.25)
 .tip { opacity: .75; font-size: 14px; margin-top: 22px; }
 .tip .g { color: #b6f07a; } .tip .r { color: #ff8a80; }
 #loading { margin: 22px 0; opacity: .7; }
+
+#bossbar { position: absolute; top: 70px; left: 50%; transform: translateX(-50%); width: min(520px, 80vw); text-align: center; }
+#bossname { font-size: 14px; letter-spacing: 4px; font-weight: 800; color: #ff6a55; text-shadow: 0 1px 6px #000; margin-bottom: 4px; }
+#bossbar .bar { height: 10px; background: rgba(0,0,0,.5); border: 1px solid rgba(255,90,70,.6); border-radius: 5px; overflow: hidden; }
+#bossfill { height: 100%; width: 100%; background: linear-gradient(90deg, #8b0000, #ff3b2f); transition: width .15s; }
+#nadebox { font-size: 12px; letter-spacing: 2px; color: #ffb020; margin-top: 4px; }
+#nadebox b { font-size: 18px; }
+#nadebox.none { opacity: .35; }
+.toast.o { color: #ffc24a; }
+.tip .o { color: #ffc24a; }

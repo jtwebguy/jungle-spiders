@@ -6,7 +6,7 @@ Spiders from mouse-sized to dog-sized swarm you in waves and **leap** at your fa
 Fight back with an **M4A1-S** and a **M1911**, and scavenge **ammo crates** and **med kits**
 scattered through the jungle (look for the light beams).
 
-**Play:** https://<your-username>.github.io/jungle-spiders/ (after GitHub Pages is enabled)
+**Play:** https://jtwebguy.github.io/jungle-spiders/
 
 ## Controls
 
@@ -18,6 +18,7 @@ scattered through the jungle (look for the light beams).
 | Shift | Sprint |
 | Space | Jump |
 | R | Reload |
+| G / Right click | Throw grenade |
 | 1 / 2 / Q / Mouse wheel | Switch weapon |
 | Esc | Pause |
 
@@ -25,6 +26,8 @@ scattered through the jungle (look for the light beams).
 
 - **Spiders**: sizes range from ~15 cm (mouse) to ~1 m (dog). Small ones are fast and die in one hit; big ones are tanky and hit hard. They skitter toward you, crouch, then leap in an arc aimed at your head. Later waves bring more of the big ones.
 - **Weapons**: M4A1-S — 30-round mag, 34 dmg. M1911 — 7-round mag, 55 dmg, very accurate.
+- **Bosses**: every wave has a boss spider that arrives mid-wave — each one bigger than the last (1.5 m leg span on wave 1, 3.7 m on wave 5, 6.5 m on wave 10 and still growing). Bosses leap and slam the ground with a shockwave, call in swarms of babies from wave 2, and drop loot when they die.
+- **Grenades**: from wave 5, dead spiders (and bosses) drop grenades. Carry up to 6. They bounce, blow up after ~2 s and send spiders flying — keep your distance.
 - **Pickups**: ammo crates refill both guns, med kits heal 35 HP. They respawn elsewhere 25 s after pickup, and dead spiders sometimes drop small ones.
 
 ## Running locally
