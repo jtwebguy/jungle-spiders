@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Jungle Spiders</title>
+<link rel="stylesheet" href="style.css" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="hud" class="hidden">
+  <div id="crosshair"><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i></div>
+  <div id="hitmarker"></div>
+  <div id="top">
+    <div><span class="lbl">WAVE</span> <b id="wave">1</b></div>
+    <div><span class="lbl">SPIDERS</span> <b id="left">0</b></div>
+    <div><span class="lbl">KILLS</span> <b id="kills">0</b></div>
+  </div>
+  <div id="banner"></div>
+  <div id="health">
+    <div class="lbl">HEALTH</div>
+    <div class="bar"><div id="hpfill"></div></div>
+    <b id="hptext">100</b>
+  </div>
+  <div id="ammo">
+    <div id="wname">M4A1-S</div>
+    <div><b id="mag">30</b><span id="reserve">/ 90</span></div>
+    <div id="reloadhint"></div>
+    <div id="slots"><span id="slot1" class="on">1 M4A1-S</span><span id="slot2">2 M1911</span></div>
+  </div>
+  <div id="toasts"></div>
+</div>
+<div id="vignette"></div>
+
+<div id="menu" class="screen">
+  <h1>JUNGLE <span>SPIDERS</span></h1>
+  <p class="sub">They jump. Some are the size of a mouse. Some are the size of a dog.</p>
+  <div id="loading">Loading models…</div>
+  <button id="play" class="hidden">CLICK TO PLAY</button>
+  <div class="controls">
+    <div><kbd>W A S D</kbd> move</div>
+    <div><kbd>Mouse</kbd> aim / shoot</div>
+    <div><kbd>Shift</kbd> sprint</div>
+    <div><kbd>Space</kbd> jump</div>
+    <div><kbd>R</kbd> reload</div>
+    <div><kbd>1</kbd> <kbd>2</kbd> / <kbd>Wheel</kbd> switch weapon</div>
+    <div><kbd>Esc</kbd> pause</div>
+  </div>
+  <p class="tip">Grab <span class="g">ammo crates</span> and <span class="r">med kits</span> — look for the light beams in the jungle.</p>
+</div>
+
+<div id="pause" class="screen hidden">
+  <h1>PAUSED</h1>
+  <button id="resume">CLICK TO RESUME</button>
+</div>
+
+<div id="over" class="screen hidden">
+  <h1>YOU WERE <span>EATEN</span></h1>
+  <p class="sub" id="overstats"></p>
+  <button id="restart">PLAY AGAIN</button>
+</div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>
